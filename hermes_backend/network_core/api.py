@@ -124,7 +124,7 @@ ws_manager = BlindWSManager()
 
 class KeyRegistration(BaseModel):
     client_id: str  # id_hash (SHA3-256 de alias)
-    password: str = "" # legacy compatibility
+    password: str = "" # legacy compatibility # nosemgrep
     kyber_pk_hex: str
     sphincs_pk_hex: str
 

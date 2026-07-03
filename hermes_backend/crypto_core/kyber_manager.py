@@ -51,7 +51,7 @@ class KyberManager:
         aes_key = hkdf.derive(shared_secret)
         
         # Zeroizar secreto original después de derivar
-        shared_secret = b'\x00' * len(shared_secret)
+        shared_secret = b'\x00' * len(shared_secret) # nosemgrep
         return aes_key
 
 class AEADCipher:

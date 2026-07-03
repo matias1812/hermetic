@@ -38,10 +38,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Install cargo-audit
-      run: cargo install cargo-audit
+    - name: Install cargo-binstall & cargo-audit
+      run: |
+        curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+        cargo binstall -y cargo-audit
     - name: Run Cargo Audit
-      run: cargo audit --dir hermes_crypto_wasm
+      run: |
+        cd hermes_crypto_wasm
+        cargo audit
 
   coverage:
     runs-on: ubuntu-latest

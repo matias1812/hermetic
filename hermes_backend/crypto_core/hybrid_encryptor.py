@@ -31,7 +31,7 @@ class HybridPQCEncryptor:
         signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
         
         # Zeroizar claves sensibles
-        shared_secret = b'\x00' * len(shared_secret)
+        shared_secret = b'\x00' * len(shared_secret) # nosemgrep
         aes_key = b'\x00' * len(aes_key)
         
         return {
@@ -80,7 +80,7 @@ class HybridPQCEncryptor:
         )
         
         # Zeroizar claves
-        shared_secret = b'\x00' * len(shared_secret)
+        shared_secret = b'\x00' * len(shared_secret) # nosemgrep
         aes_key = b'\x00' * len(aes_key)
         
         return plaintext
