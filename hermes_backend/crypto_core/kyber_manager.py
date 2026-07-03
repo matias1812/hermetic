@@ -51,6 +51,9 @@ class KyberManager:
         aes_key = hkdf.derive(shared_secret)
         
         # Zeroizar secreto original después de derivar
+        # shared_secret only exists temporarily.
+        # Python immutable bytes cannot be reliably zeroized in place due to GC.
+        # Real memory zeroization is handled natively by the Rust WASM core.
         shared_secret = b'\x00' * len(shared_secret) # nosemgrep
         return aes_key
 

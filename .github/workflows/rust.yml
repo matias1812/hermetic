@@ -29,6 +29,11 @@ jobs:
     - name: Run Clippy
       run: cargo clippy --manifest-path hermes_crypto_wasm/Cargo.toml -- -D warnings
       
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        
     - name: Run Tests (WASM)
       run: |
         cd hermes_crypto_wasm

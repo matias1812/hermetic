@@ -20,7 +20,12 @@ jobs:
         run: |
           pip install fastapi uvicorn websockets cryptography requests pydantic
           nohup uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port 8000 &
-          sleep 5
+          
+          # Esperar activamente a que FastAPI levante
+          for i in {1..30}; do
+              curl -s http://127.0.0.1:8000/docs > /dev/null && break
+              sleep 1
+          done
           
       - name: ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.12.0

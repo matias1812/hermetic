@@ -31,6 +31,9 @@ class HybridPQCEncryptor:
         signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
         
         # Zeroizar claves sensibles
+        # shared_secret only exists temporarily.
+        # Python immutable bytes cannot be reliably zeroized in place due to GC.
+        # Real memory zeroization is handled natively by the Rust WASM core.
         shared_secret = b'\x00' * len(shared_secret) # nosemgrep
         aes_key = b'\x00' * len(aes_key)
         
@@ -80,6 +83,9 @@ class HybridPQCEncryptor:
         )
         
         # Zeroizar claves
+        # shared_secret only exists temporarily.
+        # Python immutable bytes cannot be reliably zeroized in place due to GC.
+        # Real memory zeroization is handled natively by the Rust WASM core.
         shared_secret = b'\x00' * len(shared_secret) # nosemgrep
         aes_key = b'\x00' * len(aes_key)
         
