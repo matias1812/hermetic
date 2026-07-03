@@ -70,8 +70,8 @@ impl RatchetState {
     }
 
     /// Crear un nuevo estado de ratchet especificando rol (iniciador o receptor)
-    pub fn new_with_role(shared_secret: &[u8; 32], is_alice: bool) -> Self {
-        let mut state = Self {
+    pub fn new_with_role(shared_secret: &[u8; 32], _is_alice: bool) -> Self {
+        Self {
             root_key: *shared_secret,
             sending_chain_key: [0u8; CHAIN_KEY_SIZE],
             receiving_chain_key: [0u8; CHAIN_KEY_SIZE],
@@ -87,67 +87,7 @@ impl RatchetState {
             prev_message_number: 0,
             skipped_keys: Vec::new(),
             protocol_version: 2,
-        };
-
-        // Derivar claves iniciales
-        state.derive_initial_keys_with_role(is_alice);
-
-        state
-    }
-
-    /// Derivar claves iniciales desde la Root Key según el rol
-    fn derive_initial_keys_with_role(&mut self, is_alice: bool) {
-        use hkdf::Hkdf;
-        use sha2::Sha512;
-
-        let hkdf = Hkdf::<Sha512>::new(None, &self.root_key);
-
-        let send_label: &[u8] = if is_alice {
-            b"sending_chain"
-        } else {
-            b"receiving_chain"
-        };
-        let recv_label: &[u8] = if is_alice {
-            b"receiving_chain"
-        } else {
-            b"sending_chain"
-        };
-        let hdr_send_label: &[u8] = if is_alice {
-            b"header_key_send"
-        } else {
-            b"header_key_recv"
-        };
-        let hdr_recv_label: &[u8] = if is_alice {
-            b"header_key_recv"
-        } else {
-            b"header_key_send"
-        };
-        let nhk_send_label: &[u8] = if is_alice {
-            b"next_header_key_send"
-        } else {
-            b"next_header_key_recv"
-        };
-        let nhk_recv_label: &[u8] = if is_alice {
-            b"next_header_key_recv"
-        } else {
-            b"next_header_key_send"
-        };
-
-        hkdf.expand(send_label, &mut self.sending_chain_key)
-            .unwrap();
-        hkdf.expand(recv_label, &mut self.receiving_chain_key)
-            .unwrap();
-        hkdf.expand(hdr_send_label, &mut self.header_key_send)
-            .unwrap();
-        hkdf.expand(hdr_recv_label, &mut self.header_key_recv)
-            .unwrap();
-
-        let mut nhk_s = [0u8; HEADER_KEY_SIZE];
-        let mut nhk_r = [0u8; HEADER_KEY_SIZE];
-        hkdf.expand(nhk_send_label, &mut nhk_s).unwrap();
-        hkdf.expand(nhk_recv_label, &mut nhk_r).unwrap();
-        self.next_header_key_send = Some(nhk_s);
-        self.next_header_key_recv = Some(nhk_r);
+        }
     }
 
     /// Verificar integridad del estado

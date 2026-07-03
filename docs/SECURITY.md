@@ -32,8 +32,15 @@
 - WASM cargado sin modificaciones
 - Usuario verifica Safety Numbers
 
-## Política de Divulgación
-- Reportar a security@hermes.chat
-- Cifrar con PGP key (fingerprint: TBD)
-- Tiempo de respuesta: 48 horas
-- Período de embargo: 90 días
+## Programa de Divulgación de Vulnerabilidades (VDP)
+Agradecemos a la comunidad de investigadores de seguridad su colaboración para mantener HermesChat seguro. Si encuentras un fallo de seguridad, por favor repórtalo siguiendo estas pautas:
+
+* **Canal de Contacto:** Enviar reporte a `security@hermes.chat`.
+* **Cifrado (Opcional pero recomendado):** Puedes usar nuestra llave PGP pública (Fingerprint: TBD) para enviar la información de manera segura.
+* **Tiempos de Respuesta (SLA):**
+  - Acuse de recibo: 48 horas.
+  - Evaluación inicial y triage: 5 días hábiles.
+  - Resolución / Plan de mitigación: 15-30 días dependiendo de la criticidad.
+* **Política de Puerto Seguro (Safe Harbor):** Si realizas tu investigación de buena fe sin afectar a usuarios reales, sin exfiltrar datos y reportando a través de este canal, no iniciaremos acciones legales en tu contra.
+* **Reconocimiento:** Los reportes válidos que resulten en parches críticos serán reconocidos públicamente (si el investigador lo desea) en nuestro Salón de la Fama y archivo de Cambios de Seguridad.
+* **Período de Embargo:** Solicitamos 90 días de confidencialidad antes de publicar pruebas de concepto (PoC) para darnos tiempo de proteger a la comunidad y desplegar parches en producción.

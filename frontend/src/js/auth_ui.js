@@ -152,6 +152,9 @@ export async function tryRestoreSession() {
         if (cachedPass) {
             try {
                 const alias = localStorage.getItem("hermes_alias_" + storedUserHash) || localStorage.getItem("hermes_alias_legacy") || "";
+                if (!alias) {
+                    throw new Error("Alias local extraviado, forzando relogin");
+                }
                 state.storage.setUserId(storedUserHash);
                 const unlocked = await state.storage.unlock(cachedPass);
                 if (unlocked) {
@@ -160,9 +163,16 @@ export async function tryRestoreSession() {
                 }
             } catch (e) {
                 console.warn("[Auth] Error al restaurar sesión en background:", e.message);
+                sessionStorage.removeItem("session_user_id_hash");
+                sessionStorage.removeItem("session_pass");
             }
         }
-        showUnlockScreenFor(localStorage.getItem("hermes_alias_" + storedUserHash) || "", storedUserHash);
+        const aliasParaDesbloqueo = localStorage.getItem("hermes_alias_" + storedUserHash) || "";
+        if (aliasParaDesbloqueo) {
+            showUnlockScreenFor(aliasParaDesbloqueo, storedUserHash);
+        } else {
+            showAccountSelector();
+        }
     } else {
         const saved = loadAllLocalIdentities();
         if (saved.length > 0) {
@@ -427,10 +437,15 @@ export async function doLoginTransition(alias, password) {
 
     } catch (e) {
         if (e.name === 'StorageDecryptionError') {
-            showToast("Datos corruptos. Tu contraseña cambió o el almacenamiento está dañado.", "error");
             document.getElementById('login-view').classList.add('hidden');
             document.getElementById('account-select-view').classList.remove('hidden');
-            alert("No fue posible abrir tu almacenamiento. Es posible que hayas intentado restaurar o los datos estén dañados. Inicia sesión con la contraseña correcta o restaura un respaldo.");
+            if (window.modalManager) {
+                await window.modalManager.alert(
+                    '[ ERROR DE DESCIFRADO ]',
+                    'No fue posible abrir tu almacenamiento.\n\nEs posible que los datos estén dañados o la contraseña sea incorrecta. Inicia sesión con la contraseña correcta o restaura un respaldo (.hermes).',
+                    'error'
+                );
+            }
             return;
         }
         console.warn("[Auth] Aviso al cargar bases locales (re-inicializando sesión segura):", e.message);
@@ -564,8 +579,11 @@ export async function doLoginTransition(alias, password) {
     // Setup backup reminder
     const reminderSelect = document.getElementById("backup-reminder-select");
     if (reminderSelect) {
-        startBackupReminder(parseInt(reminderSelect.value));
+        const savedInterval = localStorage.getItem("hermes_backup_reminder") || "3600";
+        reminderSelect.value = savedInterval;
+        startBackupReminder(parseInt(savedInterval));
         reminderSelect.addEventListener("change", (e) => {
+            localStorage.setItem("hermes_backup_reminder", e.target.value);
             startBackupReminder(parseInt(e.target.value));
         });
     }
@@ -829,10 +847,14 @@ export function setupSettingsDropdown() {
                     if (window.closeSettingsModal) window.closeSettingsModal();
                     const bm = document.getElementById('backup-modal');
                     if (bm) {
-                        if (bm.parentElement !== document.body) document.body.appendChild(bm);
-                        bm.style.setProperty('z-index', '2147483647', 'important');
-                        bm.classList.remove('hidden');
-                        setTimeout(() => bm.classList.remove('opacity-0'), 10);
+                        if (window.modalManager) {
+                            window.modalManager.open(bm);
+                        } else {
+                            if (bm.parentElement !== document.body) document.body.appendChild(bm);
+                            bm.style.setProperty('z-index', '2147483647', 'important');
+                            bm.classList.remove('hidden');
+                            setTimeout(() => bm.classList.remove('opacity-0'), 10);
+                        }
                     }
                 };
             }
@@ -870,13 +892,7 @@ export function setupSettingsDropdown() {
 
     if (btnProfile) {
         btnProfile.onclick = (e) => {
-            if (window.openSettingsModal) window.openSettingsModal(e);
-        };
-    }
-
-    if (btnCloseSettings) {
-        btnCloseSettings.onclick = (e) => {
-            if (window.closeSettingsModal) window.closeSettingsModal(e);
+            if (window.modalManager) window.modalManager.open('settings-modal');
         };
     }
 
@@ -1061,6 +1077,9 @@ export function setupAuthEventListeners() {
                 }
 
                 await doLoginTransition(alias, password);
+            } catch (err) {
+                console.error("[Login] Error:", err);
+                showToast("Error inesperado al iniciar sesión", true);
             } finally {
                 btnLogin.disabled = false;
                 btnLogin.textContent = originalText;
@@ -1070,6 +1089,7 @@ export function setupAuthEventListeners() {
 
     if (btnRegister) {
         btnRegister.addEventListener("click", async () => {
+            if (btnRegister.disabled) return;
             const alias = regAliasInput.value.trim().toLowerCase();
             const password = regPassInput.value;
             const confirmPass = regPassConfirmInput.value;
@@ -1087,15 +1107,18 @@ export function setupAuthEventListeners() {
                 return;
             }
 
-            const idHash = await sha256(alias);
+            btnRegister.disabled = true;
+            const originalText = btnRegister.textContent;
+            btnRegister.textContent = "[ REGISTRANDO... ]";
+
+            try {
+                const idHash = await sha256(alias);
             state.storage.setUserId(idHash);
             
             localStorage.setItem("hermes_alias_" + idHash, alias);
             localStorage.setItem("hermes_alias_legacy", alias);
 
             await state.storage.unlock(password);
-
-            try {
                 console.log("[Auth] Generando llaves maestras en WASM...");
                 const generated = hermesBridge.generateIdentityKeys();
                 
@@ -1119,6 +1142,10 @@ export function setupAuthEventListeners() {
                 if (regRes.ok) {
                     showToast("Registro exitoso");
                     
+                    // Guardar llaves en almacenamiento local PRIMERO y FUERA del try-catch
+                    // para garantizar que nunca se pierdan si algo falla en el backup/recovery
+                    await state.storage.save('hermes_keys', state.userKeys);
+
                     // Inicializar el Sistema de Recuperación Nivel Dios
                     try {
                         await recoverySystem.initialize(idHash);
@@ -1139,7 +1166,6 @@ export function setupAuthEventListeners() {
                     return;
                 }
 
-                await state.storage.save('hermes_keys', state.userKeys);
                 state.currentUser = alias.toLowerCase();
 
                 await state.contacts.save(state.storage);
@@ -1157,6 +1183,9 @@ export function setupAuthEventListeners() {
             } catch (e) {
                 console.error(e);
                 showToast('Error de registro: ' + e.message, true);
+            } finally {
+                btnRegister.disabled = false;
+                btnRegister.textContent = originalText;
             }
         });
     }

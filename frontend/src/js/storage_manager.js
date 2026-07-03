@@ -19,6 +19,7 @@ export class EncryptedStorageManager {
     }
     
     setUserId(idHash) {
+        if (!idHash || idHash === "undefined" || idHash === "null") return;
         this.currentUserIdHash = idHash;
         sessionStorage.setItem('session_user_id_hash', idHash);
     }
@@ -42,12 +43,21 @@ export class EncryptedStorageManager {
     }
 
     async _doUnlock(password) {
-        if (!this.getUserId()) {
+        const userId = this.getUserId();
+        if (!userId) {
             throw new Error("No se ha definido un ID de usuario antes de desbloquear el almacenamiento.");
         }
         
         await hermesBridge.init();
-        hermesBridge.unlockVault(password);
+
+        let salt = localStorage.getItem('vault_salt_' + userId);
+        if (!salt) {
+            salt = hermesBridge.generateVaultSalt();
+            localStorage.setItem('vault_salt_' + userId, salt);
+            console.log("[StorageManager] Generado nuevo Argon2 salt para la bóveda");
+        }
+
+        hermesBridge.unlockVault(password, salt);
         
         const testData = localStorage.getItem('_hermes_lock_test_' + this.getUserId());
         if (testData) {
@@ -271,7 +281,10 @@ export class EncryptedStorageManager {
                 return await this.decrypt(encryptedDB);
             }
         } catch (e) {
-            if (e.name === 'StorageDecryptionError') throw e;
+            if (e.name === 'StorageDecryptionError') {
+                console.warn("[StorageManager] Error de descifrado en IndexedDB (posible resto de cuenta anterior). Ignorando data.");
+                return null;
+            }
             console.warn("[StorageManager] Error IndexedDB al cargar", e);
         }
 
@@ -285,7 +298,10 @@ export class EncryptedStorageManager {
             localStorage.removeItem(prefixedKey); // Liberar cuota
             return parsed;
         } catch (e) {
-            if (e.name === 'StorageDecryptionError') throw e;
+            if (e.name === 'StorageDecryptionError') {
+                console.warn("[StorageManager] Error de descifrado en localStorage (posible resto de cuenta anterior). Ignorando data.");
+                return null;
+            }
             console.error("Failed to decrypt data for key:", key);
             return null;
         }

@@ -1,0 +1,42 @@
+rules:
+  - id: python-sql-injection-fastapi
+    patterns:
+      - pattern: cursor.execute($QUERY, ...)
+      - pattern-inside: |
+          def $FUNC(...):
+            ...
+      - metavariable-regex:
+          metavariable: $QUERY
+          regex: |
+            .*(f".*"|f'.*'|%s|\.format\().*
+    message: "Potential SQL injection detected via string formatting. Use parameterized queries (e.g. `execute('... ? ...', (var,))`)."
+    severity: ERROR
+    languages:
+      - python
+
+  - id: fastapi-missing-privacy-middleware
+    patterns:
+      - pattern: app = FastAPI(...)
+      - pattern-not-inside: |
+          app = FastAPI(...)
+          ...
+          app.add_middleware(TotalPrivacyMiddleware)
+    message: "FastAPI app instance missing TotalPrivacyMiddleware. IP leakage possible."
+    severity: WARNING
+    languages:
+      - python
+
+  - id: sensitive-data-in-memory
+    patterns:
+      - pattern: $VAR = $SECRET
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: ".*(private_key|secret|password|mlkem|sphincs).*"
+      - pattern-not-inside: |
+          $VAR = $SECRET
+          ...
+          del $VAR
+    message: "Sensitive variable not explicitly deleted from memory. Consider zeroizing or using `del`."
+    severity: INFO
+    languages:
+      - python

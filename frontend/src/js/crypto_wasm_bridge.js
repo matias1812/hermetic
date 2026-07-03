@@ -22,82 +22,90 @@ export class RealHermesCrypto {
     }
 
     async init() {
-        try {
-            // 1. Cargar WASM binario para verificación (con soporte para Node.js y navegador)
-            let wasmBytes;
-            if (typeof process !== 'undefined' && process.versions && process.versions.node && typeof import.meta.env === 'undefined') {
-                const fs = await import(/* @vite-ignore */ 'node:fs');
-                const wasmPath = new URL('../wasm/hermes_crypto_wasm_bg.wasm', import.meta.url);
-                wasmBytes = fs.readFileSync(wasmPath);
-            } else {
-                const wasmPath = new URL('../wasm/hermes_crypto_wasm_bg.wasm', import.meta.url).href;
-                const wasmResponse = await fetch(wasmPath).catch(() => null);
-                if (!wasmResponse || !wasmResponse.ok) {
-                    throw new Error('Could not fetch WASM binary for integrity check');
+        if (this.ready) return true;
+        if (this._initPromise) return this._initPromise;
+
+        this._initPromise = (async () => {
+            try {
+                // 1. Cargar WASM binario para verificación (con soporte para Node.js y navegador)
+                let wasmBytes;
+                if (typeof process !== 'undefined' && process.versions && process.versions.node && typeof import.meta.env === 'undefined') {
+                    const fs = await import(/* @vite-ignore */ 'node:fs');
+                    const wasmPath = new URL('../wasm/hermes_crypto_wasm_bg.wasm', import.meta.url);
+                    wasmBytes = fs.readFileSync(wasmPath);
+                } else {
+                    const wasmPath = new URL('../wasm/hermes_crypto_wasm_bg.wasm', import.meta.url).href;
+                    const wasmResponse = await fetch(wasmPath).catch(() => null);
+                    if (!wasmResponse || !wasmResponse.ok) {
+                        throw new Error('Could not fetch WASM binary for integrity check');
+                    }
+                    wasmBytes = await wasmResponse.arrayBuffer();
                 }
-                wasmBytes = await wasmResponse.arrayBuffer();
+
+                // 2. Verificar hash SHA-256
+                const hash = await crypto.subtle.digest('SHA-256', wasmBytes);
+                const hashHex = Array.from(new Uint8Array(hash))
+                    .map(b => b.toString(16).padStart(2, '0')).join('');
+
+                // 3. Comparar con hash esperado (generado en build)
+                const EXPECTED_HASH = WASM_EXPECTED_HASH;
+
+                if (hashHex !== EXPECTED_HASH) {
+                    console.error(
+                        `[RealHermesCrypto] WASM INTEGRITY WARNING!\n` +
+                        `Expected: ${EXPECTED_HASH}\n` +
+                        `Got:      ${hashHex}\n` +
+                        `The WASM module has changed or been tampered with.`
+                    );
+                    throw new Error('WASM INTEGRITY CHECK FAILED');
+                } else {
+                    console.log('[RealHermesCrypto] ✅ WASM integrity verified (SHA-256)');
+                }
+
+                // 4. Cargar módulo WASM dinámicamente (JS wrapper)
+                const wasmModule = await import('../wasm/hermes_crypto_wasm.js').catch((e) => {
+                    console.error('[RealHermesCrypto] WASM Load Error:', e);
+                    return null;
+                });
+
+                if (wasmModule && wasmModule.default) {
+                    await wasmModule.default({ module_or_path: wasmBytes });
+                    this.rustCrypto = new wasmModule.HermesCore();
+                    this.rustUtils = new wasmModule.HermesCrypto();
+                    this.wasmModule = wasmModule;
+                } else {
+                    throw new Error('WASM module not found at expected path');
+                }
+
+                // Verificar integridad funcional del módulo WASM
+                const testData = new Uint8Array([0xDE, 0xAD, 0xBE, 0xEF]);
+                const zeroized = this.rustUtils.secure_zeroize(testData);
+                if (!zeroized) {
+                    throw new Error('WASM integrity check failed: secure_zeroize returned false');
+                }
+
+                this.ready = true;
+                this.mode  = 'wasm_active';
+                console.log('[RealHermesCrypto] WASM verificado — nonce aleatorio OsRng, zeroización auditada');
+                return true;
+
+            } catch (error) {
+                // FAIL-CLOSED: no hay fallback. Sin WASM = sistema no operativo.
+                this.ready  = false;
+                this.mode   = 'wasm_unavailable';
+                this._error = error.message;
+
+                console.error('[RealHermesCrypto] FATAL — WASM no disponible:', error.message);
+                console.error('[RealHermesCrypto] Hermetic requiere WASM para operar de forma segura.');
+                console.error('[RealHermesCrypto] Compilar con: wasm-pack build --target web --release');
+
+                // Propagar el error — el llamador debe manejar la ausencia de WASM
+                throw error;
+            } finally {
+                this._initPromise = null;
             }
-
-            // 2. Verificar hash SHA-256
-            const hash = await crypto.subtle.digest('SHA-256', wasmBytes);
-            const hashHex = Array.from(new Uint8Array(hash))
-                .map(b => b.toString(16).padStart(2, '0')).join('');
-
-            // 3. Comparar con hash esperado (generado en build)
-            const EXPECTED_HASH = WASM_EXPECTED_HASH;
-
-            if (hashHex !== EXPECTED_HASH) {
-                console.error(
-                    `[RealHermesCrypto] WASM INTEGRITY WARNING!\n` +
-                    `Expected: ${EXPECTED_HASH}\n` +
-                    `Got:      ${hashHex}\n` +
-                    `The WASM module has changed or been tampered with.`
-                );
-                throw new Error('WASM INTEGRITY CHECK FAILED');
-            } else {
-                console.log('[RealHermesCrypto] ✅ WASM integrity verified (SHA-256)');
-            }
-
-            // 4. Cargar módulo WASM dinámicamente (JS wrapper)
-            const wasmModule = await import('../wasm/hermes_crypto_wasm.js').catch((e) => {
-                console.error('[RealHermesCrypto] WASM Load Error:', e);
-                return null;
-            });
-
-            if (wasmModule && wasmModule.default) {
-                await wasmModule.default({ module_or_path: wasmBytes });
-                this.rustCrypto = new wasmModule.HermesCore();
-                this.rustUtils = new wasmModule.HermesCrypto();
-                this.wasmModule = wasmModule;
-            } else {
-                throw new Error('WASM module not found at expected path');
-            }
-
-            // Verificar integridad funcional del módulo WASM
-            const testData = new Uint8Array([0xDE, 0xAD, 0xBE, 0xEF]);
-            const zeroized = this.rustUtils.secure_zeroize(testData);
-            if (!zeroized) {
-                throw new Error('WASM integrity check failed: secure_zeroize returned false');
-            }
-
-            this.ready = true;
-            this.mode  = 'wasm_active';
-            console.log('[RealHermesCrypto] WASM verificado — nonce aleatorio OsRng, zeroización auditada');
-            return true;
-
-        } catch (error) {
-            // FAIL-CLOSED: no hay fallback. Sin WASM = sistema no operativo.
-            this.ready  = false;
-            this.mode   = 'wasm_unavailable';
-            this._error = error.message;
-
-            console.error('[RealHermesCrypto] FATAL — WASM no disponible:', error.message);
-            console.error('[RealHermesCrypto] Hermetic requiere WASM para operar de forma segura.');
-            console.error('[RealHermesCrypto] Compilar con: wasm-pack build --target web --release');
-
-            // Propagar el error — el llamador debe manejar la ausencia de WASM
-            throw error;
-        }
+        })();
+        return this._initPromise;
     }
 
     /**
@@ -150,10 +158,18 @@ export class RealHermesCrypto {
     // API inmutable transaccional (Fase 2)
     // ─────────────────────────────────────────
 
-    unlockVault(password) {
+    generateVaultSalt() {
+        this._assertReady('generateVaultSalt');
+        return this.rustCrypto.generate_vault_salt();
+    }
+
+    unlockVault(password, saltHex) {
         this._assertReady('unlockVault');
         console.debug("[HermesBridge] unlockVault");
-        return this.rustCrypto.unlock_vault(password);
+        if (!saltHex) {
+            throw new Error("saltHex es requerido para unlockVault con Argon2id");
+        }
+        return this.rustCrypto.unlock_vault(password, saltHex);
     }
 
     lockVault() {
@@ -202,12 +218,52 @@ export class RealHermesCrypto {
 
     encryptBackupData(data, password) {
         this._assertReady('encryptBackupData');
-        throw new Error("NotImplemented: encryptBackupData pending Rust implementation");
+        console.debug("[HermesBridge] encryptBackupData");
+        
+        let plaintextBytes;
+        if (typeof data === 'string') {
+            plaintextBytes = new TextEncoder().encode(data);
+        } else if (data instanceof Uint8Array) {
+            plaintextBytes = data;
+        } else {
+            // Asumimos que es un objeto y lo serializamos a JSON string, luego a Uint8Array
+            plaintextBytes = new TextEncoder().encode(JSON.stringify(data));
+        }
+        
+        // Cifra los bytes usando la clave maestra ya derivada y cargada en WASM (HermesCore)
+        const encrypted = this.rustCrypto.encrypt_backup(plaintextBytes);
+        
+        // Retornamos raw Uint8Array (BackupManager usa Blob)
+        return encrypted;
     }
 
     decryptBackupData(encrypted, password) {
         this._assertReady('decryptBackupData');
-        throw new Error("NotImplemented: decryptBackupData pending Rust implementation");
+        console.debug("[HermesBridge] decryptBackupData");
+        
+        let ciphertextBytes;
+        if (typeof encrypted === 'string') {
+            throw new Error("decryptBackupData expects Uint8Array");
+        } else if (encrypted instanceof ArrayBuffer) {
+            ciphertextBytes = new Uint8Array(encrypted);
+        } else if (encrypted instanceof Uint8Array) {
+            ciphertextBytes = encrypted;
+        } else {
+            throw new Error("Invalid ciphertext format");
+        }
+
+        const decrypted = this.rustCrypto.decrypt_backup(ciphertextBytes, password || null);
+        if (!decrypted) {
+            throw new Error("StorageDecryptionError: Fallo descifrando backup con AEAD.");
+        }
+        
+        // Retornamos el JSON parseado o el string
+        const jsonStr = new TextDecoder().decode(decrypted);
+        try {
+            return JSON.parse(jsonStr);
+        } catch(e) {
+            return jsonStr; 
+        }
     }
 
     backup() { return this.backupVault(); }

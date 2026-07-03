@@ -145,10 +145,8 @@ export function setupBackupRestoreListeners() {
 
     btnBackupSettings?.addEventListener("click", () => {
         loadBackupsList();
-        const bm = document.getElementById("backup-modal");
-        if (bm) {
-            bm.classList.remove("hidden");
-            setTimeout(() => bm.classList.remove("opacity-0"), 10);
+        if (window.modalManager) {
+            window.modalManager.open("backup-modal");
         }
     });
 

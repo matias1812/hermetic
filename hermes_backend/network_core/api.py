@@ -44,7 +44,15 @@ class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
             
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > limit:
-            return Response(content="Payload Too Large", status_code=413)
+            response = Response(content="Payload Too Large", status_code=413)
+            # Anti-cache and privacy headers
+            response.headers["Cache-Control"] = "no-store, max-age=0, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            response.headers["Server"] = "Hermes-Relay" # Ocultar info de uvicorn/fastapi
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
+            return response
         return await call_next(request)
 
 app.add_middleware(PayloadSizeLimitMiddleware)
@@ -409,50 +417,6 @@ async def fetch_blobs_endpoint(request: Request, data: FetchRequest):
         
     return {"blobs": formatted}
 
-@app.post("/api/sign_challenge")
-async def sign_challenge_endpoint(request: Request, data: SignChallengeRequest):
-    ip = request.state.blind_ip
-    if not rate_limiter.check_rest(ip, limit=10, window=60.0):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    try:
-        msg_bytes = data.challenge.encode('utf-8')
-        sk_bytes = bytes.fromhex(data.sphincs_sk_hex)
-        sig = SphincsManager.sign(msg_bytes, sk_bytes)
-        return {"signature_hex": sig.hex()}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-# ============================================
-# STATELESS CRYPTO UTILITIES
-# ============================================
-
-@app.post("/api/encrypt")
-async def encrypt_message(data: EncryptRequest):
-    try:
-        res = HermesNativeCore.encrypt_envelope(
-            data.plaintext_hex,
-            data.receiver_kyber_pk_hex,
-            data.sender_sphincs_sk_hex,
-            data.session_key_hex,
-            data.sender_id,
-            data.receiver_id
-        )
-        return res
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/api/decrypt")
-async def decrypt_message(data: DecryptRequest):
-    try:
-        res = HermesNativeCore.decrypt_envelope(
-            data.encrypted_package,
-            data.receiver_kyber_sk_hex,
-            data.sender_sphincs_pk_hex,
-            data.session_key_hex
-        )
-        return {"plaintext": res.decode('utf-8', errors='ignore')}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 @app.api_route("/api/verify", methods=["GET", "POST"])
 async def system_verification(request: Request):
@@ -488,67 +452,7 @@ async def system_verification(request: Request):
 # DEBUG ENDPOINTS (development only)
 # ============================================
 
-@app.get("/api/debug/db_status")
-async def debug_db_status(request: Request):
-    """
-    Estado en tiempo real de la base de datos del servidor.
-    
-    NOTA ARQUITECTURAL (Zero-Knowledge):
-    - users=0 NO significa que nadie pueda entrar a la app.
-    - El login/unlock es LOCAL (AES-256-GCM en el navegador, PBKDF2 600K iter).
-    - El servidor solo almacena claves PÚBLICAS para relay de mensajes.
-    - Con users=0: el WebSocket auth falla (mensajes no llegan).
-    - Con users>0: relay y WS auth funcionan correctamente.
-    """
-    ip = request.state.blind_ip
-    if not rate_limiter.check_rest(ip, limit=20, window=60.0):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    try:
-        user_count = db.count_users()
-        key_count = db.count_used_keys()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB query error: {e}")
-
-    return {
-        "engine": "MySQL" if db.is_mysql else "SQLite",
-        "database": db.db_name if db.is_mysql else db.sqlite_path,
-        "users_registered": user_count,
-        "online_users": len(ws_manager.active_connections),
-        "used_key_hashes": key_count,
-        "relay_functional": user_count > 0,
-        "architecture_note": (
-            "Zero-Knowledge: server stores only public keys for relay. "
-            "Local unlock (AES-GCM/PBKDF2) works independently of server DB. "
-            "WS auth requires user to be in DB (auto-registered on login via _ensureRegistered)."
-        ),
-        "warning": (
-            "No users in server DB. WebSocket auth will fail until users re-login (auto-fixes on next page load)."
-            if user_count == 0 else None
-        )
-    }
-
-@app.post("/api/debug/purge")
-async def debug_purge_db(request: Request):
-    """
-    ☢️ LIMPIEZA NUCLEAR de la base de datos (solo para desarrollo/testing).
-    Elimina TODOS los usuarios y hashes de claves usadas.
-    Los datos del navegador (localStorage) NO se ven afectados.
-    """
-    ip = request.state.blind_ip
-    if not rate_limiter.check_rest(ip, limit=5, window=60.0):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    try:
-        deleted = db.purge_all()
-        return {
-            "status": "purged",
-            "deleted_users": deleted.get("users", 0),
-            "deleted_key_hashes": deleted.get("key_hashes", 0),
-            "note": "Server DB cleared. Browser localStorage is unaffected (Zero-Knowledge)."
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Purge error: {e}")
 
 
 
@@ -617,9 +521,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 
                 if receiver_hash and encrypted_blob_hex and session_key_hash:
                     # Registrar hash de sesión
-                    if db.is_key_used(session_key_hash):
+                    nonce_hash = hashlib.sha256(session_key_hash.encode()).hexdigest()
+                    if db.is_key_used(nonce_hash):
                         continue
-                    db.mark_key_used(session_key_hash, expires_at=int(time.time()) + 86400)
+                    db.mark_key_used(nonce_hash, expires_at=int(time.time()) + 86400)
                     
                     ws_sent = await ws_manager.send_blob(receiver_hash, {
                         "type": "relayed_blob",

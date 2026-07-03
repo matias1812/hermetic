@@ -13,6 +13,8 @@ use zeroize::Zeroize;
 pub struct HermesCore {
     /// Llave maestra derivada (Root Vault Key)
     vault_key: Option<[u8; 32]>,
+    /// Salt utilizado para derivar la vault_key (necesario para inyectar en el backup)
+    vault_salt: Option<[u8; 16]>,
 
     /// Secretos locales de identidad X3DH (zeroizable)
     ik_secret: Option<[u8; 32]>,
@@ -36,12 +38,39 @@ impl Default for HermesCore {
     }
 }
 
+impl Drop for HermesCore {
+    fn drop(&mut self) {
+        if let Some(mut k) = self.vault_key {
+            k.zeroize();
+        }
+        if let Some(mut k) = self.ik_secret {
+            k.zeroize();
+        }
+        if let Some(mut k) = self.signing_secret {
+            k.zeroize();
+        }
+        if let Some(mut k) = self.mldsa_secret_seed {
+            k.zeroize();
+        }
+        if let Some(mut k) = self.spk_secret {
+            k.zeroize();
+        }
+        for val in self.opk_secrets.values_mut() {
+            val.zeroize();
+        }
+        for val in self.groups.values_mut() {
+            val.zeroize();
+        }
+    }
+}
+
 #[wasm_bindgen]
 impl HermesCore {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self {
             vault_key: None,
+            vault_salt: None,
             ik_secret: None,
             signing_secret: None,
             mldsa_secret_seed: None,
@@ -52,16 +81,46 @@ impl HermesCore {
         }
     }
 
-    /// Desbloquea la bóveda (deriva llave maestra desde contraseña)
-    pub fn unlock_vault(&mut self, _password: &str) -> bool {
-        self.vault_key = Some([0u8; 32]);
-        true
+    /// Genera un salt aleatorio de 16 bytes para la bóveda local (Argon2id)
+    pub fn generate_vault_salt(&self) -> String {
+        use rand::RngCore;
+        let mut salt = [0u8; 16];
+        OsRng.fill_bytes(&mut salt);
+        hex::encode(salt)
+    }
+
+    /// Desbloquea la bóveda (deriva llave maestra desde contraseña con Argon2id)
+    pub fn unlock_vault(&mut self, password: &str, salt_hex: &str) -> bool {
+        use argon2::Argon2;
+
+        let salt_bytes = match hex::decode(salt_hex) {
+            Ok(b) if b.len() == 16 => b,
+            _ => return false, // Salt inválido
+        };
+
+        let argon2 = Argon2::default();
+        let mut key = [0u8; 32];
+        if argon2
+            .hash_password_into(password.as_bytes(), &salt_bytes, &mut key)
+            .is_ok()
+        {
+            self.vault_key = Some(key);
+            let mut salt_arr = [0u8; 16];
+            salt_arr.copy_from_slice(&salt_bytes);
+            self.vault_salt = Some(salt_arr);
+            true
+        } else {
+            false
+        }
     }
 
     /// Cierra sesión y zeroiza la RAM de WASM.
     pub fn close_session(&mut self) {
         if let Some(mut key) = self.vault_key.take() {
             key.zeroize();
+        }
+        if let Some(mut s) = self.vault_salt.take() {
+            s.zeroize();
         }
         if let Some(mut key) = self.ik_secret.take() {
             key.zeroize();
@@ -190,6 +249,7 @@ impl HermesCore {
         self.sessions.insert(contact_id.to_string(), ratchet);
 
         sk.zeroize();
+        pqc_shared_secret_out.zeroize();
 
         serde_json::to_string(&handshake)
             .map_err(|e| JsValue::from_str(&format!("Error serializando InitialHandshake: {}", e)))
@@ -240,6 +300,7 @@ impl HermesCore {
         self.sessions.insert(contact_id.to_string(), ratchet);
 
         sk.zeroize();
+        pqc_shared_secret.zeroize();
         if let Some(mut k) = opk_sec {
             k.zeroize();
         }
@@ -523,7 +584,136 @@ impl HermesCore {
         let mut okm = [0u8; 32];
         hk.expand(b"hermes-backup-key-v1", &mut okm)
             .map_err(|_| "Fallo en derivación HKDF".to_string())?;
-        Ok(okm.to_vec())
+        let res = okm.to_vec();
+        okm.zeroize();
+        Ok(res)
+    }
+
+    /// Cifrar datos de la bóveda (backup) utilizando la llave maestra en memoria
+    pub fn encrypt_backup(&self, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        use chacha20poly1305::{
+            aead::{Aead, KeyInit, Payload},
+            XChaCha20Poly1305, XNonce,
+        };
+        use hkdf::Hkdf;
+        use rand::RngCore;
+        use sha2::Sha256;
+
+        let vault_key = self
+            .vault_key
+            .ok_or_else(|| "Storage error: Vault key not available (vault locked)".to_string())?;
+        
+        let vault_salt = self
+            .vault_salt
+            .ok_or_else(|| "Storage error: Vault salt not available".to_string())?;
+
+        // 1. Derivar BackupKey via HKDF
+        let hk = Hkdf::<Sha256>::new(None, &vault_key);
+        let mut backup_key = [0u8; 32];
+        hk.expand(b"Hermes Backup Key", &mut backup_key)
+            .map_err(|_| "Fallo en derivación HKDF para backup".to_string())?;
+
+        let key = chacha20poly1305::Key::from_slice(&backup_key);
+        let cipher = XChaCha20Poly1305::new(key);
+        backup_key.zeroize(); // zeroizar temporal
+
+        // 2. Nonce aleatorio de 24 bytes
+        let mut nonce_bytes = [0u8; 24];
+        rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = XNonce::from_slice(&nonce_bytes);
+
+        // 3. AAD
+        let aad = b"Hermes Backup Format v1";
+
+        // 4. Payload
+        let payload = Payload {
+            msg: plaintext,
+            aad,
+        };
+
+        // 5. Cifrar
+        let ciphertext = cipher
+            .encrypt(nonce, payload)
+            .map_err(|_| "Error cifrando backup de bóveda".to_string())?;
+
+        // 6. Magic bytes y versioning: HERMESBK (8) + 01 (1) + 02 (1) = 10 bytes
+        // En v2, agregamos el salt de 16 bytes. Header total: 26 bytes.
+        let magic = b"HERMESBK\x01\x02";
+        let mut final_payload = Vec::with_capacity(10 + 16 + 24 + ciphertext.len());
+        final_payload.extend_from_slice(magic);
+        final_payload.extend_from_slice(&vault_salt); // 16 bytes
+        final_payload.extend_from_slice(&nonce_bytes); // 24 bytes
+        final_payload.extend_from_slice(&ciphertext); // len
+
+        Ok(final_payload)
+    }
+
+    /// Descifrar datos de la bóveda (backup). 
+    /// Si opt_password se provee, deriva la VaultKey desde el salt del backup.
+    /// Si es nulo, asume que la bóveda está desbloqueada y usa la VaultKey en memoria.
+    pub fn decrypt_backup(&self, payload: &[u8], opt_password: Option<String>) -> Result<Vec<u8>, String> {
+        use chacha20poly1305::{
+            aead::{Aead, KeyInit, Payload},
+            XChaCha20Poly1305, XNonce,
+        };
+        use hkdf::Hkdf;
+        use sha2::Sha256;
+        use argon2::Argon2;
+
+        // 1. Extraer header: 10 bytes magic + 16 bytes salt + 24 bytes nonce
+        if payload.len() < 10 + 16 + 24 + 16 {
+            return Err("Formato de backup inválido o truncado".to_string());
+        }
+
+        let magic = &payload[..10];
+        if magic != b"HERMESBK\x01\x02" {
+            return Err("Versión de backup no soportada o archivo corrupto (se requiere v2)".to_string());
+        }
+
+        let salt = &payload[10..26];
+        let nonce_bytes = &payload[26..50];
+        let ciphertext = &payload[50..];
+
+        // 2. Determinar la VaultKey a usar
+        let mut vault_key = [0u8; 32];
+        if let Some(password) = opt_password {
+            // Derivar desde la contraseña y el salt extraído del backup
+            let argon2 = Argon2::default();
+            argon2.hash_password_into(password.as_bytes(), salt, &mut vault_key)
+                .map_err(|_| "Fallo derivando clave con Argon2id".to_string())?;
+        } else {
+            // Usar la de la sesión
+            if let Some(vk) = self.vault_key {
+                vault_key.copy_from_slice(&vk);
+            } else {
+                return Err("Bóveda bloqueada y no se proveyó contraseña".to_string());
+            }
+        }
+
+        // 3. Derivar BackupKey via HKDF
+        let hk = Hkdf::<Sha256>::new(None, &vault_key);
+        let mut backup_key = [0u8; 32];
+        hk.expand(b"Hermes Backup Key", &mut backup_key)
+            .map_err(|_| "Fallo en derivación HKDF para backup".to_string())?;
+
+        let key = chacha20poly1305::Key::from_slice(&backup_key);
+        let cipher = XChaCha20Poly1305::new(key);
+        backup_key.zeroize();
+        vault_key.zeroize();
+
+        let nonce = XNonce::from_slice(nonce_bytes);
+        let aad = b"Hermes Backup Format v1";
+
+        let decrypt_payload = Payload {
+            msg: ciphertext,
+            aad,
+        };
+
+        let plaintext = cipher
+            .decrypt(nonce, decrypt_payload)
+            .map_err(|_| "Fallo descifrando backup con AEAD (clave incorrecta o manipulación detectada)".to_string())?;
+
+        Ok(plaintext)
     }
 
     /// Cifra el payload del backup local de manera hermética con XChaCha20Poly1305
@@ -532,12 +722,13 @@ impl HermesCore {
         mnemonic: &str,
         data: &[u8],
     ) -> Result<Vec<u8>, String> {
-        let key = self.derive_recovery_key(mnemonic)?;
+        let mut key = self.derive_recovery_key(mnemonic)?;
         use chacha20poly1305::{
             aead::{Aead, AeadCore, KeyInit, OsRng},
             Key, XChaCha20Poly1305,
         };
         let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        key.zeroize();
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng); // 24-bytes
 
         let ciphertext = cipher
@@ -555,8 +746,9 @@ impl HermesCore {
         mnemonic: &str,
         data: &[u8],
     ) -> Result<Vec<u8>, String> {
-        let key = self.derive_recovery_key(mnemonic)?;
+        let mut key = self.derive_recovery_key(mnemonic)?;
         if data.len() < 24 {
+            key.zeroize();
             return Err("Datos muy cortos para descifrar backup".to_string());
         }
         let nonce = &data[0..24];
@@ -567,6 +759,7 @@ impl HermesCore {
             Key, XChaCha20Poly1305, XNonce,
         };
         let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        key.zeroize();
         let plaintext = cipher
             .decrypt(XNonce::from_slice(nonce), ciphertext)
             .map_err(|_| "Mnemónico inválido o archivo de respaldo corrupto".to_string())?;

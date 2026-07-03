@@ -84,23 +84,25 @@ export async function openSafetyNumberModal(state, targetId, onVerifiedCb) {
         </div>
     `;
 
-    root.classList.remove('hidden');
-    root.classList.add('flex');
+    if (window.modalManager) {
+        window.modalManager.open(root);
+    } else {
+        root.classList.remove('hidden');
+        root.classList.add('flex');
+    }
 
     const btnClose = document.getElementById('btn-sn-close');
     const btnConfirm = document.getElementById('btn-sn-confirm');
 
     const closeModal = () => {
-        root.classList.add('hidden');
-        root.classList.remove('flex');
-        root.innerHTML = '';
-        document.removeEventListener('keydown', keyHandler);
+        if (window.modalManager) {
+            window.modalManager.closeActive();
+        } else {
+            root.classList.add('hidden');
+            root.classList.remove('flex');
+            root.innerHTML = '';
+        }
     };
-
-    const keyHandler = (e) => {
-        if (e.key === 'Escape') closeModal();
-    };
-    document.addEventListener('keydown', keyHandler);
 
     if (btnClose) btnClose.onclick = closeModal;
 

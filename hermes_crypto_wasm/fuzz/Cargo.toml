@@ -12,3 +12,13 @@ libfuzzer-sys = "0.4"
 
 [dependencies.hermes_crypto_wasm]
 path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "decrypt_fuzzer"
+path = "fuzz_targets/decrypt_fuzzer.rs"
+test = false
+doc = false

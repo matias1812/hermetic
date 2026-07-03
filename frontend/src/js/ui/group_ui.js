@@ -247,8 +247,12 @@ export async function createGroup(name, memberIds, renderGroupSidebarCb) {
 export function buildCreateGroupModal() {
     const modal = document.getElementById('create-group-modal');
     if (!modal) return;
-    modal.classList.remove('hidden');
-    setTimeout(() => modal.classList.remove('opacity-0'), 10);
+    if (window.modalManager) {
+        window.modalManager.open(modal);
+    } else {
+        modal.classList.remove('hidden');
+        setTimeout(() => modal.classList.remove('opacity-0'), 10);
+    }
 
     const container = document.getElementById('create-group-members-list');
     if (!container) return;

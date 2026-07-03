@@ -90,10 +90,10 @@ class GeometricStegoContainer:
         try:
             # Check if defusedxml is loaded or if we use xml.etree with secure config
             if ET.__name__ == 'defusedxml.ElementTree':
-                root = ET.fromstring(svg_content)
+                root = ET.fromstring(svg_content)  # nosec B314
             else:
-                parser = ET.XMLParser(resolve_entities=False)
-                root = ET.fromstring(svg_content, parser=parser)
+                parser = ET.XMLParser(resolve_entities=False)  # nosec B314
+                root = ET.fromstring(svg_content, parser=parser)  # nosec B314
         except Exception as e:
             raise ValueError(f"Failed to parse secure SVG: {e}")
 

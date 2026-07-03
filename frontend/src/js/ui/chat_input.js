@@ -177,9 +177,13 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
     }
 
     const triggerSend = async () => {
+        if (btnSend && btnSend.disabled) return;
         const text = chatInput ? chatInput.value.trim() : '';
         const targetId = state.activeContact || state.activeGroup;
         if (!text || !targetId) return;
+
+        if (btnSend) btnSend.disabled = true;
+        if (chatInput) chatInput.disabled = true;
 
         if (chatInput) chatInput.value = "";
 
@@ -253,6 +257,12 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
             if (renderMessagesCb) renderMessagesCb();
             if (chatInput) chatInput.value = text; // Restaurar texto para que no se pierda
             showToast('Error enviando mensaje', true);
+        } finally {
+            if (btnSend) btnSend.disabled = false;
+            if (chatInput) {
+                chatInput.disabled = false;
+                chatInput.focus();
+            }
         }
     };
 
@@ -262,7 +272,10 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
 
     if (chatInput) {
         chatInput.onkeydown = (e) => {
-            if (e.key === "Enter") triggerSend();
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                triggerSend();
+            }
         };
 
         chatInput.addEventListener('input', () => {
@@ -366,6 +379,8 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                 const confirmed = await modalManager.confirm('[ ENVIAR IMAGEN ]', confirmMsg);
                 if (!confirmed) return;
                 
+                if (btnSendPhoto) btnSendPhoto.disabled = true;
+                
                 try {
                     const payload = state.activeGroup ? {
                         type: isEphemeral ? "group_ephemeral_image" : "group_chat",
@@ -412,6 +427,8 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                 } catch (err) {
                     console.error(err);
                     showToast('Error al enviar la foto', true);
+                } finally {
+                    if (btnSendPhoto) btnSendPhoto.disabled = false;
                 }
             };
             reader.readAsDataURL(file);

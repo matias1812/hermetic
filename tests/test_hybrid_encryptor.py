@@ -1,5 +1,6 @@
 import unittest
 import secrets
+from hypothesis import given, settings, strategies as st
 from hermes_backend.crypto_core.kyber_manager import KyberManager
 from hermes_backend.crypto_core.sphincs_manager import SphincsManager
 from hermes_backend.crypto_core.hybrid_encryptor import HybridPQCEncryptor
@@ -171,7 +172,27 @@ class TestHybridPQCEncryptor(unittest.TestCase):
             # Rejection or parsing failure of entity is also acceptable/safe behavior
             pass
 
+    @settings(max_examples=100, deadline=None)
+    @given(st.binary(min_size=1, max_size=1024), st.binary(min_size=0, max_size=512))
+    def test_hypothesis_encryption_properties(self, plaintext_data, aad_data):
+        """Test Fuzzing (Propiedades): encrypt(decrypt(M)) == M para entradas masivas aleatorias."""
+        # Se verifica que datos arbitrarios binarios no rompen las matemáticas del HybridPQCEncryptor
+        encrypted = self.encryptor.encrypt(
+            plaintext=plaintext_data,
+            receiver_kyber_pk=self.receiver_pk,
+            sender_sphincs_sk=self.sender_sk,
+            associated_data=aad_data if len(aad_data) > 0 else None,
+        )
+        
+        decrypted = self.encryptor.decrypt(
+            encrypted_package=encrypted,
+            receiver_kyber_sk=self.receiver_sk,
+            sender_sphincs_pk=self.sender_pk,
+            associated_data=aad_data if len(aad_data) > 0 else None,
+        )
+        self.assertEqual(plaintext_data, decrypted, "Invariante de descifrado roto bajo Fuzzing")
 
 if __name__ == '__main__':
     unittest.main()
+
 

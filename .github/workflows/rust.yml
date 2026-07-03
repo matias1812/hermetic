@@ -1,0 +1,73 @@
+name: Rust CI & Fuzzing
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test_and_lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: wasm32-unknown-unknown
+        components: rustfmt, clippy
+    
+    - name: Install wasm-pack
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      
+    - name: Check Formatting
+      run: cargo fmt --manifest-path hermes_crypto_wasm/Cargo.toml -- --check
+
+    - name: Run Clippy
+      run: cargo clippy --manifest-path hermes_crypto_wasm/Cargo.toml -- -D warnings
+      
+    - name: Run Tests (WASM)
+      run: |
+        cd hermes_crypto_wasm
+        wasm-pack test --node
+
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+    - name: Run Cargo Audit
+      run: cargo audit --dir hermes_crypto_wasm
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Install cargo-tarpaulin
+      run: cargo install cargo-tarpaulin
+    - name: Run Coverage
+      run: |
+        cd hermes_crypto_wasm
+        cargo tarpaulin --out Xml
+
+  asan_ubsan_fuzz:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust Nightly
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: rust-src
+    - name: Install cargo-fuzz
+      run: cargo install cargo-fuzz
+    - name: Run libFuzzer Harness (Smoke test)
+      # Run for a limited time (e.g., 60 seconds) in CI just to ensure it doesn't crash on standard inputs
+      run: |
+        cd hermes_crypto_wasm/fuzz
+        cargo +nightly fuzz run decrypt_fuzzer -- -max_total_time=60

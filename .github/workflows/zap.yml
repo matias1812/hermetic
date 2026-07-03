@@ -1,0 +1,30 @@
+name: OWASP ZAP DAST
+
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * 0' # Weekly
+
+jobs:
+  zap_scan:
+    runs-on: ubuntu-latest
+    name: Scan the webapplication
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Start FastAPI Backend
+        run: |
+          pip install fastapi uvicorn websockets cryptography requests pydantic
+          nohup uvicorn hermes_backend.network_core.api:app --host 127.0.0.1 --port 8000 &
+          
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'http://127.0.0.1:8000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a'
+          
+      # Since we also have a frontend, we might want to scan it as well if it's served.
+      # ZAP can spider and attack the endpoints.

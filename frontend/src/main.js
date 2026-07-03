@@ -1,6 +1,20 @@
+// --- INICIO: PRODUCTION LOGGER OVERRIDE ---
+if (typeof window !== 'undefined' && localStorage.getItem('HERMES_DEBUG') !== 'true') {
+    window.console.log = function() {};
+    window.console.info = function() {};
+    window.console.debug = function() {};
+    window.console.trace = function() {};
+}
+// --- FIN: PRODUCTION LOGGER OVERRIDE ---
+
 import './style.css';
 import { state, showToast } from './js/state.js';
 import { modalManager } from './js/ui/modal_manager.js';
+import { apiFetch } from './js/api.js';
+
+window.modalManager = modalManager;
+window.fetch = apiFetch;
+
 import { AuthValidator } from './js/auth.js';
 import {
     setupAuthEventListeners,
@@ -66,7 +80,11 @@ window.openCreateGroupModal = () => {
 };
 
 window.submitCreateGroup = async () => {
-    const name = document.getElementById('cg-name').value.trim();
+    const btn = document.getElementById('btn-submit-create-group');
+    if (btn && btn.disabled) return;
+
+    const nameEl = document.getElementById('cg-name');
+    const name = nameEl ? nameEl.value.trim() : '';
     const checked = [...document.querySelectorAll('.cg-member-check:checked')].map(el => el.value);
 
     if (!name) {
@@ -78,7 +96,15 @@ window.submitCreateGroup = async () => {
         return;
     }
 
-    await createGroup(name, checked);
+    if (btn) btn.disabled = true;
+    try {
+        await createGroup(name, checked);
+        if (nameEl) nameEl.value = '';
+    } catch (e) {
+        console.error("Error creating group:", e);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 };
 
 window.removeGroupMemberFn = async function(userId) {

@@ -159,7 +159,7 @@ export class SyncManager {
             } else if (res.status === 401) {
                 console.warn("[SyncManager] Re-registrando llaves públicas en relevo tras respuesta 401...");
                 if (userKeys.kyber_pk && userKeys.sphincs_pk) {
-                    await fetch('/api/register', {
+                    const reg = await fetch('/api/register', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -167,7 +167,22 @@ export class SyncManager {
                             kyber_pk_hex: userKeys.kyber_pk,
                             sphincs_pk_hex: userKeys.sphincs_pk
                         })
-                    }).catch(() => {});
+                    }).catch(() => null);
+
+                    if (reg && !reg.ok) {
+                        console.error(`[SyncManager] Fallo en re-registro: HTTP ${reg.status}.`);
+                        if (reg.status === 409 || reg.status === 429) {
+                            this.stop();
+                            console.error("[SyncManager] Desincronización crítica o límite de peticiones excedido.");
+                            if (window.modalManager) {
+                                window.modalManager.alert(
+                                    'ERROR DE SINCRONIZACIÓN', 
+                                    'No se pudo autenticar con el servidor. Por favor, cierra sesión y vuelve a entrar o restaura tu cuenta.', 
+                                    'error'
+                                );
+                            }
+                        }
+                    }
                 }
             } else {
 

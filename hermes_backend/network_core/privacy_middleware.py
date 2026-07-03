@@ -49,6 +49,10 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
         # Procesar request
         response = await call_next(request)
         
+        # Inyectar cabeceras globales de seguridad
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
+        
         # SOLO log ciego (sin información sensible, IPs reales o UA)
         logger.debug(
             f"BLIND_RELAY | {blind_request_id} | "
@@ -80,4 +84,4 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
         except ValueError:
             pass
         
-        return "0.0.0.0"  # Fallback ultra-seguro
+        return "0.0.0.0"  # nosec B104 (Fallback ultra-seguro anonimizado)
