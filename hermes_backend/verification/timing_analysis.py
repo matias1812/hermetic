@@ -59,9 +59,9 @@ class TimingTestsVerify:
             summary["passed"] = passed
             
             if passed:
-                summary["logs"].append("PASSED: Software comparison timing variance is within acceptable margins.")
+                summary["logs"].append("PASSED: No se observaron diferencias significativas de tiempo en este entorno de prueba.")
             else:
-                summary["logs"].append("WARNING: High timing jitter detected. Typical for Python interpreter scheduling.")
+                summary["logs"].append("WARNING: High timing jitter detected in this test environment (typical for Python interpreter scheduling).")
                 summary["passed"] = True
                 
         except Exception as e:

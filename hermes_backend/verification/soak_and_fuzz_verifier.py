@@ -61,7 +61,7 @@ class HermesV8SoakAndFuzzVerifier:
             self.log_pass("Fixed-Block Traffic Masking", [
                 f"Evaluadas 9 longitudes de texto plano entre 1 y 499 bytes.",
                 f"Tamaños de bloque salientes emitidos: {sorted(list(fixed_blocks_emitted))} bytes.",
-                "VERIFICADO: Un adversario interceptando la red no puede deducir la longitud real del mensaje."
+                "Observed behavior: Enmascaramiento por bloques fijos en las 9 longitudes evaluadas."
             ])
         else:
             self.log_fail("Fixed-Block Traffic Masking", f"Bloques emitidos inesperados: {fixed_blocks_emitted}")
@@ -115,7 +115,7 @@ class HermesV8SoakAndFuzzVerifier:
             self.log_pass("High-Volume Fuzzing Immunity", [
                 f"Inyectados {iterations} paquetes criptográficos arbitrariamente mutados en {elapsed:.3f}s.",
                 f"Rechazados por autenticación AEAD/SPHINCS+ (Fail-Closed): {rejections}/{iterations} (100%).",
-                "VERIFICADO: Cero pánicos, cero caídas de servicio y cero descifrados espurios."
+                "Observed behavior: Las inyecciones arbitrarias no provocaron pánicos, excepciones no controladas ni corrupción observable del estado."
             ])
         else:
             self.log_fail("High-Volume Fuzzing Immunity", f"Crashes/descifrados inválidos: {crashes_detected}")
@@ -154,7 +154,7 @@ class HermesV8SoakAndFuzzVerifier:
         self.log_pass("High-Concurrency Soak Test", [
             f"Completadas {soak_count} rondas completas de encapsulamiento híbrido PQC + AES-GCM.",
             f"Tiempo total: {elapsed:.2f}s | Rendimiento: {throughput:.1f} mensajes/segundo.",
-            "VERIFICADO: Estabilidad continua bajo estrés sin degradación ni fugas en buffers efímeros."
+            "Observed behavior: Estabilidad bajo carga empírica sostenida en este entorno sin degradación observable ni excepciones de estado."
         ])
 
     def run_all(self):

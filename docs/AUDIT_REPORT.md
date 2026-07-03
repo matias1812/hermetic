@@ -6,6 +6,10 @@
 > **VEREDICTO DE AUDITORÍA INTERNA**
 > Las características descritas en este documento han sido verificadas mediante inspección de código y pruebas funcionales reproducibles. Este documento detalla el estado técnico actual de la implementación, pero **no constituye una certificación independiente o externa**.
 
+> [!WARNING]
+> **DISTINCIÓN DE MODOS DE EJECUCIÓN Y FALLBACK**
+> En entornos de desarrollo o pruebas automáticas donde el módulo FFI de Rust (`hermes_ffi`) no esté compilado o cargado, el sistema opera en **Modo Fallback Python (`pqcrypto`)** usando ML-KEM-1024 y SPHINCS+. Las métricas de auditoría local (caos, timing, entropía) obtenidas en dicho modo reflejan el comportamiento del respaldo Python y **no evalúan en tiempo de ejecución el motor nativo Rust/WASM**. En modo Producción (`HERMES_ENV=production`), el servidor rechaza el arranque sin el núcleo Rust (*Fail-Closed*).
+
 ---
 
 ## 1. Cumplimiento de Estándares

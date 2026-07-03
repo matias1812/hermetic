@@ -602,6 +602,15 @@ class FinalEvaluator:
         print("=" * 70)
         print("🔍 AUDITORÍA COMPLETA - HERMESCHAT v7.0")
         print("=" * 70)
+        try:
+            from hermes_backend.crypto_core.native_core import NATIVE_AVAILABLE
+            if not NATIVE_AVAILABLE:
+                print("\n⚠️  MODO DE EJECUCIÓN: Python fallback (pqcrypto)")
+                print("    El núcleo Rust FFI no fue cargado. Esta auditoría evalúa el backend PQC en Python.\n")
+            else:
+                print("\n✓  MODO DE EJECUCIÓN: Núcleo Rust/WASM nativo activo.\n")
+        except Exception:
+            pass
         
         privacy = PrivacyAuditor()
         zk = ZeroKnowledgeAuditor()

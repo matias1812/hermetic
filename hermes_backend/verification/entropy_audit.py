@@ -70,9 +70,9 @@ class EntropyTestsVerify:
             summary["passed"] = passed
             
             if passed:
-                summary["logs"].append("PASSED: Aggregated key materials satisfy NIST SP 800-22 randomness criteria.")
+                summary["logs"].append("PASSED: Empirical sanity checks passed (sample satisfies NIST SP 800-22 empirical thresholds).")
             else:
-                summary["logs"].append("FAILED: Key pool failed random thresholds.")
+                summary["logs"].append("FAILED: Key pool failed empirical randomness thresholds.")
                 
         except Exception as e:
             summary["logs"].append(f"Execution failed: {e}")

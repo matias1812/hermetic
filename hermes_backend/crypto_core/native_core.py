@@ -9,13 +9,53 @@ from hermes_backend.stego_engine.geometric_container import GeometricStegoContai
 
 logger = logging.getLogger(__name__)
 
+import os
+
 try:
     import hermes_ffi
     NATIVE_AVAILABLE = True
-    logger.info("Successfully loaded Rust FFI binary 'hermes_ffi'. All operations will run natively.")
+    logger.info(
+        "\n==================================================\n"
+        "Execution mode\n"
+        "==================================================\n"
+        "Rust FFI: Available & Active\n"
+        "Engine: Native Rust/WASM Core\n"
+        "=================================================="
+    )
 except ImportError:
     NATIVE_AVAILABLE = False
-    logger.warning("Could not load Rust FFI binary 'hermes_ffi'. Falling back to Python pqcrypto (ML-KEM-1024 + SPHINCS+).")
+    env_mode = os.environ.get("HERMES_ENV", os.environ.get("HERMES_MODE", "development")).lower()
+    if env_mode in ("production", "prod"):
+        fatal_msg = (
+            "\n==================================================\n"
+            "FATAL: Production mode startup refused.\n"
+            "==================================================\n"
+            "Rust cryptographic engine ('hermes_ffi') unavailable.\n"
+            "Refusing startup.\n"
+            "=================================================="
+        )
+        logger.critical(fatal_msg)
+        raise RuntimeError(fatal_msg)
+    logger.warning(
+        "\n==================================================\n"
+        "Execution mode\n"
+        "==================================================\n"
+        "Rust FFI: unavailable\n\n"
+        "Fallback:\n"
+        "Python pqcrypto backend\n\n"
+        "Algorithms:\n"
+        "ML-KEM-1024\n"
+        "SPHINCS+\n\n"
+        "Coverage:\n"
+        "✓ API\n"
+        "✓ Backend\n"
+        "✓ Relay\n"
+        "✗ Rust FFI\n"
+        "✗ WASM\n"
+        "✗ HermesCore native implementation\n"
+        "=================================================="
+    )
+
 
 class HermesNativeCore:
     """

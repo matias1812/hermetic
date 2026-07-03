@@ -96,7 +96,7 @@ class ChaosEngineeringSuite:
 
             assert msg_id not in ephemeral_ram_store, "Infracción: El paquete permanece en RAM tras expirar TTL."
             assert all(b == 0 for b in dummy_payload), "Infracción: El buffer RAM no fue zeroizado antes de liberar."
-            self.log("[OK] VERIFICADO: Paquete expirado fue zeroizado en RAM y purgado. Cero rastro en servidor.")
+            self.log("[OK] Observed behavior: Paquete expirado fue zeroizado en RAM transitoria y purgado.")
             return True
         except Exception as e:
             self.log(f"[FAIL] Error en Chaos Test 1: {str(e)}")
@@ -145,7 +145,7 @@ class ChaosEngineeringSuite:
                 self.log("[FAIL] Infracción: El motor permitió descifrar un sobre alterado con nonce repetido.")
                 return False
             except (SecurityError, Exception) as se:
-                self.log(f"[OK] VERIFICADO: El motor abortó inmediatamente ante alteración MITM o de estado: {type(se).__name__}")
+                self.log(f"[OK] Observed behavior: El motor abortó inmediatamente ante alteración MITM o de estado: {type(se).__name__}")
                 return True
         except Exception as e:
             self.log(f"[FAIL] Error en Chaos Test 2: {str(e)}")
@@ -191,7 +191,7 @@ class ChaosEngineeringSuite:
                 self.log("[FAIL] Infracción: El motor aceptó un sobre redirigido a otro destinatario.")
                 return False
             except (SecurityError, Exception):
-                self.log("[OK] VERIFICADO: El binding AAD rechazó el sobre retransmitido hacia otro contexto.")
+                self.log("[OK] Observed behavior: El binding AAD rechazó el sobre retransmitido hacia otro contexto.")
                 return True
         except Exception as e:
             self.log(f"[FAIL] Error en Chaos Test 3: {str(e)}")
@@ -229,7 +229,7 @@ class ChaosEngineeringSuite:
                 except (SecurityError, ValueError, KeyError, Exception):
                     pass # Comportamiento legítimo y esperado (Fail-Closed)
 
-            self.log("[OK] VERIFICADO: El motor sobrevivió al 100% de las inyecciones de fuzzing sin colapsar.")
+            self.log("[OK] Observed behavior: Los cuatro casos de prueba no provocaron panic, excepción no controlada ni corrupción observable del estado.")
             return True
         except Exception as e:
             self.log(f"[FAIL] Error en Chaos Test 4: {str(e)}")
