@@ -1,0 +1,8 @@
+﻿cargo : error: 'cargo-clippy.exe' is not installed for the toolchain 'stable-x86_64-pc-windows-gnu'.
+At line:1 char:117
++ ... t.log 2>&1; cargo clippy > ..\docs\evidence\Phase-00\cargo-clippy.log ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (error: 'cargo-c...c-windows-gnu'.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+help: run `rustup component add clippy` to install it

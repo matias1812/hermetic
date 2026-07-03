@@ -1,0 +1,11 @@
+Evidence
+
+Action: decrypt_message
+Algorithm: XChaCha20Poly1305
+
+Ciphertext Length: 590 bytes
+Decrypted Plaintext: Hello from Post-Quantum world!
+
+Result:
+Message correctly decrypted and authenticated.
+PASS

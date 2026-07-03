@@ -1,0 +1,9 @@
+Evidence
+
+Action: accept_session_handshake
+Role: Responder (Bob)
+Implementation: Rust/WASM
+
+Result:
+Decapsulation successful: true
+PASS

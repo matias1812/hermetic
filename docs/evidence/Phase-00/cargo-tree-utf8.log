@@ -1,0 +1,182 @@
+﻿hermes_crypto_wasm v0.1.0 (C:\Users\matia\OneDrive\Desktop\hermeticos\hermes_crypto_wasm)
+Γö£ΓöÇΓöÇ bincode v1.3.3
+Γöé   ΓööΓöÇΓöÇ serde v1.0.228
+Γöé       Γö£ΓöÇΓöÇ serde_core v1.0.228
+Γöé       ΓööΓöÇΓöÇ serde_derive v1.0.228 (proc-macro)
+Γöé           Γö£ΓöÇΓöÇ proc-macro2 v1.0.106
+Γöé           Γöé   ΓööΓöÇΓöÇ unicode-ident v1.0.24
+Γöé           Γö£ΓöÇΓöÇ quote v1.0.46
+Γöé           Γöé   ΓööΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+Γöé           ΓööΓöÇΓöÇ syn v2.0.118
+Γöé               Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+Γöé               Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+Γöé               ΓööΓöÇΓöÇ unicode-ident v1.0.24
+Γö£ΓöÇΓöÇ chacha20poly1305 v0.10.1
+Γöé   Γö£ΓöÇΓöÇ aead v0.5.2
+Γöé   Γöé   Γö£ΓöÇΓöÇ crypto-common v0.1.7
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ generic-array v0.14.7
+Γöé   Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ typenum v1.20.1
+Γöé   Γöé   Γöé   Γöé   [build-dependencies]
+Γöé   Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ version_check v0.9.5
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ rand_core v0.6.4
+Γöé   Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ getrandom v0.2.17
+Γöé   Γöé   Γöé   Γöé       ΓööΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ typenum v1.20.1
+Γöé   Γöé   ΓööΓöÇΓöÇ generic-array v0.14.7 (*)
+Γöé   Γö£ΓöÇΓöÇ chacha20 v0.9.1
+Γöé   Γöé   Γö£ΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γöé   Γö£ΓöÇΓöÇ cipher v0.4.4
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ crypto-common v0.1.7 (*)
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ inout v0.1.4
+Γöé   Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ generic-array v0.14.7 (*)
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ zeroize v1.9.0
+Γöé   Γöé   Γöé       ΓööΓöÇΓöÇ zeroize_derive v1.5.0 (proc-macro)
+Γöé   Γöé   Γöé           Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+Γöé   Γöé   Γöé           Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+Γöé   Γöé   Γöé           ΓööΓöÇΓöÇ syn v2.0.118 (*)
+Γöé   Γöé   ΓööΓöÇΓöÇ cpufeatures v0.2.17
+Γöé   Γö£ΓöÇΓöÇ cipher v0.4.4 (*)
+Γöé   Γö£ΓöÇΓöÇ poly1305 v0.8.0
+Γöé   Γöé   Γö£ΓöÇΓöÇ cpufeatures v0.2.17
+Γöé   Γöé   Γö£ΓöÇΓöÇ opaque-debug v0.3.1
+Γöé   Γöé   ΓööΓöÇΓöÇ universal-hash v0.5.1
+Γöé   Γöé       Γö£ΓöÇΓöÇ crypto-common v0.1.7 (*)
+Γöé   Γöé       ΓööΓöÇΓöÇ subtle v2.6.1
+Γöé   ΓööΓöÇΓöÇ zeroize v1.9.0 (*)
+Γö£ΓöÇΓöÇ constant_time_eq v0.3.1
+Γö£ΓöÇΓöÇ ed25519-dalek v2.2.0
+Γöé   Γö£ΓöÇΓöÇ curve25519-dalek v4.1.3
+Γöé   Γöé   Γö£ΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γöé   Γö£ΓöÇΓöÇ cpufeatures v0.2.17
+Γöé   Γöé   Γö£ΓöÇΓöÇ curve25519-dalek-derive v0.1.1 (proc-macro)
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ syn v2.0.118 (*)
+Γöé   Γöé   Γö£ΓöÇΓöÇ digest v0.10.7
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ block-buffer v0.10.4
+Γöé   Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ generic-array v0.14.7 (*)
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ crypto-common v0.1.7 (*)
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ subtle v2.6.1
+Γöé   Γöé   Γö£ΓöÇΓöÇ subtle v2.6.1
+Γöé   Γöé   ΓööΓöÇΓöÇ zeroize v1.9.0 (*)
+Γöé   Γöé   [build-dependencies]
+Γöé   Γöé   ΓööΓöÇΓöÇ rustc_version v0.4.1
+Γöé   Γöé       ΓööΓöÇΓöÇ semver v1.0.28
+Γöé   Γö£ΓöÇΓöÇ ed25519 v2.2.3
+Γöé   Γöé   ΓööΓöÇΓöÇ signature v2.2.0
+Γöé   Γö£ΓöÇΓöÇ rand_core v0.6.4 (*)
+Γöé   Γö£ΓöÇΓöÇ sha2 v0.10.9
+Γöé   Γöé   Γö£ΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γöé   Γö£ΓöÇΓöÇ cpufeatures v0.2.17
+Γöé   Γöé   ΓööΓöÇΓöÇ digest v0.10.7 (*)
+Γöé   Γö£ΓöÇΓöÇ subtle v2.6.1
+Γöé   ΓööΓöÇΓöÇ zeroize v1.9.0 (*)
+Γö£ΓöÇΓöÇ getrandom v0.2.17 (*)
+Γö£ΓöÇΓöÇ hkdf v0.12.4
+Γöé   ΓööΓöÇΓöÇ hmac v0.12.1
+Γöé       ΓööΓöÇΓöÇ digest v0.10.7 (*)
+Γö£ΓöÇΓöÇ js-sys v0.3.103
+Γöé   Γö£ΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γö£ΓöÇΓöÇ futures-util v0.3.32
+Γöé   Γöé   Γö£ΓöÇΓöÇ futures-core v0.3.32
+Γöé   Γöé   Γö£ΓöÇΓöÇ futures-task v0.3.32
+Γöé   Γöé   Γö£ΓöÇΓöÇ pin-project-lite v0.2.17
+Γöé   Γöé   ΓööΓöÇΓöÇ slab v0.4.12
+Γöé   ΓööΓöÇΓöÇ wasm-bindgen v0.2.126
+Γöé       Γö£ΓöÇΓöÇ cfg-if v1.0.4
+Γöé       Γö£ΓöÇΓöÇ once_cell v1.21.4
+Γöé       Γö£ΓöÇΓöÇ wasm-bindgen-macro v0.2.126 (proc-macro)
+Γöé       Γöé   Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+Γöé       Γöé   ΓööΓöÇΓöÇ wasm-bindgen-macro-support v0.2.126
+Γöé       Γöé       Γö£ΓöÇΓöÇ bumpalo v3.20.3
+Γöé       Γöé       Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+Γöé       Γöé       Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+Γöé       Γöé       Γö£ΓöÇΓöÇ syn v2.0.118 (*)
+Γöé       Γöé       ΓööΓöÇΓöÇ wasm-bindgen-shared v0.2.126
+Γöé       Γöé           ΓööΓöÇΓöÇ unicode-ident v1.0.24
+Γöé       ΓööΓöÇΓöÇ wasm-bindgen-shared v0.2.126 (*)
+Γöé       [build-dependencies]
+Γöé       ΓööΓöÇΓöÇ rustversion v1.0.22 (proc-macro)
+Γö£ΓöÇΓöÇ rand v0.8.6
+Γöé   Γö£ΓöÇΓöÇ rand_chacha v0.3.1
+Γöé   Γöé   Γö£ΓöÇΓöÇ ppv-lite86 v0.2.21
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ zerocopy v0.8.52
+Γöé   Γöé   ΓööΓöÇΓöÇ rand_core v0.6.4 (*)
+Γöé   ΓööΓöÇΓöÇ rand_core v0.6.4 (*)
+Γö£ΓöÇΓöÇ serde v1.0.228 (*)
+Γö£ΓöÇΓöÇ serde_json v1.0.150
+Γöé   Γö£ΓöÇΓöÇ itoa v1.0.18
+Γöé   Γö£ΓöÇΓöÇ memchr v2.8.2
+Γöé   Γö£ΓöÇΓöÇ serde_core v1.0.228
+Γöé   ΓööΓöÇΓöÇ zmij v1.0.21
+Γö£ΓöÇΓöÇ sha2 v0.10.9 (*)
+Γö£ΓöÇΓöÇ sha3 v0.10.9
+Γöé   Γö£ΓöÇΓöÇ digest v0.10.7 (*)
+Γöé   ΓööΓöÇΓöÇ keccak v0.1.6
+Γö£ΓöÇΓöÇ thiserror v1.0.69
+Γöé   ΓööΓöÇΓöÇ thiserror-impl v1.0.69 (proc-macro)
+Γöé       Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+Γöé       Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+Γöé       ΓööΓöÇΓöÇ syn v2.0.118 (*)
+Γö£ΓöÇΓöÇ wasm-bindgen v0.2.126 (*)
+Γö£ΓöÇΓöÇ x25519-dalek v2.0.1
+Γöé   Γö£ΓöÇΓöÇ curve25519-dalek v4.1.3 (*)
+Γöé   Γö£ΓöÇΓöÇ rand_core v0.6.4 (*)
+Γöé   ΓööΓöÇΓöÇ zeroize v1.9.0 (*)
+ΓööΓöÇΓöÇ zeroize v1.9.0 (*)
+[dev-dependencies]
+Γö£ΓöÇΓöÇ proptest v1.11.0
+Γöé   Γö£ΓöÇΓöÇ bit-set v0.8.0
+Γöé   Γöé   ΓööΓöÇΓöÇ bit-vec v0.8.0
+Γöé   Γö£ΓöÇΓöÇ bit-vec v0.8.0
+Γöé   Γö£ΓöÇΓöÇ bitflags v2.13.0
+Γöé   Γö£ΓöÇΓöÇ num-traits v0.2.19
+Γöé   Γöé   ΓööΓöÇΓöÇ libm v0.2.16
+Γöé   Γöé   [build-dependencies]
+Γöé   Γöé   ΓööΓöÇΓöÇ autocfg v1.5.1
+Γöé   Γö£ΓöÇΓöÇ rand v0.9.4
+Γöé   Γöé   ΓööΓöÇΓöÇ rand_core v0.9.5
+Γöé   Γöé       ΓööΓöÇΓöÇ getrandom v0.3.4
+Γöé   Γöé           ΓööΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γö£ΓöÇΓöÇ rand_chacha v0.9.0
+Γöé   Γöé   Γö£ΓöÇΓöÇ ppv-lite86 v0.2.21 (*)
+Γöé   Γöé   ΓööΓöÇΓöÇ rand_core v0.9.5 (*)
+Γöé   Γö£ΓöÇΓöÇ rand_xorshift v0.4.0
+Γöé   Γöé   ΓööΓöÇΓöÇ rand_core v0.9.5 (*)
+Γöé   Γö£ΓöÇΓöÇ regex-syntax v0.8.11
+Γöé   Γö£ΓöÇΓöÇ rusty-fork v0.3.1
+Γöé   Γöé   Γö£ΓöÇΓöÇ fnv v1.0.7
+Γöé   Γöé   Γö£ΓöÇΓöÇ quick-error v1.2.3
+Γöé   Γöé   Γö£ΓöÇΓöÇ tempfile v3.27.0
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ fastrand v2.4.1
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ getrandom v0.4.3
+Γöé   Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ cfg-if v1.0.4
+Γöé   Γöé   Γöé   Γö£ΓöÇΓöÇ once_cell v1.21.4
+Γöé   Γöé   Γöé   ΓööΓöÇΓöÇ windows-sys v0.61.2
+Γöé   Γöé   Γöé       ΓööΓöÇΓöÇ windows-link v0.2.1
+Γöé   Γöé   ΓööΓöÇΓöÇ wait-timeout v0.2.1
+Γöé   Γö£ΓöÇΓöÇ tempfile v3.27.0 (*)
+Γöé   ΓööΓöÇΓöÇ unarray v0.1.4
+ΓööΓöÇΓöÇ wasm-bindgen-test v0.3.76
+    Γö£ΓöÇΓöÇ async-trait v0.1.89 (proc-macro)
+    Γöé   Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+    Γöé   Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+    Γöé   ΓööΓöÇΓöÇ syn v2.0.118 (*)
+    Γö£ΓöÇΓöÇ cast v0.3.0
+    Γö£ΓöÇΓöÇ js-sys v0.3.103 (*)
+    Γö£ΓöÇΓöÇ libm v0.2.16
+    Γö£ΓöÇΓöÇ nu-ansi-term v0.50.3
+    Γöé   ΓööΓöÇΓöÇ windows-sys v0.61.2 (*)
+    Γö£ΓöÇΓöÇ num-traits v0.2.19 (*)
+    Γö£ΓöÇΓöÇ oorandom v11.1.5
+    Γö£ΓöÇΓöÇ serde v1.0.228 (*)
+    Γö£ΓöÇΓöÇ serde_json v1.0.150 (*)
+    Γö£ΓöÇΓöÇ wasm-bindgen v0.2.126 (*)
+    Γö£ΓöÇΓöÇ wasm-bindgen-futures v0.4.76
+    Γöé   Γö£ΓöÇΓöÇ js-sys v0.3.103 (*)
+    Γöé   ΓööΓöÇΓöÇ wasm-bindgen v0.2.126 (*)
+    Γö£ΓöÇΓöÇ wasm-bindgen-test-macro v0.3.76 (proc-macro)
+    Γöé   Γö£ΓöÇΓöÇ proc-macro2 v1.0.106 (*)
+    Γöé   Γö£ΓöÇΓöÇ quote v1.0.46 (*)
+    Γöé   ΓööΓöÇΓöÇ syn v2.0.118 (*)
+    ΓööΓöÇΓöÇ wasm-bindgen-test-shared v0.2.126

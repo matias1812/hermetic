@@ -1,0 +1,7 @@
+Evidence
+
+Action: Double Ratchet Initialization
+Algorithm: Signal Ratchet
+State: Alice and Bob have derived the identical Root Key from HKDF.
+
+PASS

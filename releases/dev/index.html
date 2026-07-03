@@ -1,0 +1,885 @@
+<!doctype html>
+
+<html lang="es">
+
+  <head>
+
+    <meta charset="UTF-8" />
+
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>HermesChat v7.1 — Anonymous Secure Chat</title>
+
+    <meta name="description" content="HermesChat — Mensajeria segura post-cuantica con cifrado E2EE ML-KEM-1024 y SPHINCS+." />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+    <style>
+
+      @media (max-width: 768px) {
+
+        #sidebar-panel { display: flex !important; }
+
+        #chat-panel { display: none; }
+
+        #sidebar-panel.mobile-hidden { display: none !important; }
+
+        #chat-panel.mobile-visible { display: flex !important; }
+
+        #btn-back-to-contacts { display: flex !important; }
+
+      }
+
+      @media (min-width: 769px) {
+
+        #btn-back-to-contacts { display: none !important; }
+
+        #sidebar-panel, #chat-panel { display: flex !important; }
+
+      }
+
+      /* ── Protección anti-screenshot (best-effort) ────────────── */
+      .ephemeral-protected #view-once-modal img {
+        -webkit-user-select: none;
+        -moz-user-select: none;
+             user-select: none;
+        pointer-events: none;
+      }
+
+      /* ── Timer bar en modal efímero ─────────────────────── */
+      #view-once-timer-bar {
+        height: 3px;
+        background: #f97316;   /* orange-500 */
+        border-radius: 2px;
+        width: 100%;
+        transition: width 1s linear;
+      }
+      #view-once-timer-bar.danger {
+        background: #ef4444;   /* red-500 */
+      }
+
+      /* ── Animación de onda de grabación ──────────────────── */
+      #audio-wave { display: flex; align-items: flex-end; gap: 2px; height: 20px; }
+      #audio-wave .wave-bar {
+        width: 3px;
+        background: #ef4444;
+        border-radius: 2px;
+        transition: height 0.15s ease;
+        min-height: 3px;
+      }
+      #audio-wave.active .wave-bar:nth-child(odd)  { animation: wavePulse 0.6s ease infinite alternate; }
+      #audio-wave.active .wave-bar:nth-child(even) { animation: wavePulse 0.6s ease 0.3s infinite alternate; }
+
+      @keyframes wavePulse {
+        from { height: 20%; }
+        to   { height: 90%; }
+      }
+
+      /* Botón de grabación activo */
+      .recording-active { animation: pulseRed 1s ease infinite; }
+      @keyframes pulseRed {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); }
+        50%       { box-shadow: 0 0 0 4px rgba(239,68,68,0.4); }
+      }
+
+    </style>
+
+    <script type="module" crossorigin src="/assets/index-iB7xzhCh.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CwDKchql.css">
+  </head>
+
+  <body class="crt-effect selection:bg-terminalGreen selection:text-black min-h-screen">
+
+    <div class="scanline"></div>
+
+    <div id="app" class="w-full h-screen flex flex-col p-1 md:p-2">
+
+
+
+      <!-- VIEW: AUTH -->
+
+      <div id="view-auth" class="flex-grow flex items-center justify-center p-4">
+
+    <!-- ============================================ -->
+    <!-- VISTA LOGIN - Estilo "Terminal de Acceso"    -->
+    <!-- ============================================ -->
+    <div id="login-view" class="max-w-md w-full bg-darkSurface border border-darkGrey rounded-lg p-6 md:p-8 shadow-2xl relative overflow-hidden auth-view">
+        <!-- Ícono de huella/hermetismo -->
+        <div class="auth-icon flex justify-center mb-4">
+            <svg width="64" height="64" viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="30" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.5"/>
+                <circle cx="32" cy="32" r="20" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.3"/>
+                <circle cx="32" cy="32" r="10" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.1"/>
+                <text x="32" y="38" text-anchor="middle" fill="#00ffff" font-size="12">⬡</text>
+            </svg>
+        </div>
+        
+        <h2 id="auth-prompt-title" class="text-center font-bold tracking-widest text-lg neon-text-cyan typing-effect mb-1 uppercase font-mono">[ INICIAR SESIÓN ]</h2>
+        <p class="text-center text-[9px] text-gray-500 uppercase tracking-widest mb-6">Accede a tu identidad cifrada</p>
+        
+        <div class="space-y-4 font-mono">
+            <div class="space-y-1">
+                <label class="text-[9px] text-gray-500 uppercase tracking-widest block font-bold">&gt; ALIAS:</label>
+                <input type="text" id="login-alias" class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-bold text-xs uppercase input-cyber" 
+                       placeholder="tu_alias" autocomplete="username">
+            </div>
+            
+            <div class="space-y-1">
+                <label class="text-[9px] text-gray-500 uppercase tracking-widest block font-bold">&gt; CLAVE DE ACCESO:</label>
+                <div class="relative password-input-wrapper">
+                    <input type="password" id="login-password" class="w-full bg-black border border-darkGrey rounded pl-3 pr-10 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-bold text-xs input-cyber" 
+                           placeholder="••••••••••••" autocomplete="current-password">
+                    <button class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-terminalGreen font-mono text-[10px] select-none toggle-password" 
+                            onclick="togglePasswordVisibility('login-password')" title="Mostrar contraseña">
+                        👁️
+                    </button>
+                </div>
+            </div>
+            
+            <button id="btn-login" class="btn-cyber w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2.5 rounded text-[10px] tracking-widest transition-all uppercase">
+                [ AUTENTICAR ]
+            </button>
+
+            <div id="login-back-to-selector-container" class="hidden text-center text-[10px] mt-2">
+                <a href="#" id="btn-back-to-selector" class="text-gray-500 hover:underline">
+                    ← Volver a selección de cuentas
+                </a>
+            </div>
+            
+            <div class="text-center text-[10px] pt-4 border-t border-darkGrey/40 space-y-1">
+                <p class="text-gray-500">¿Primera vez?</p>
+                <a href="#" onclick="showRegisterView()" class="text-terminalGreen hover:underline neon-link">
+                    Crear nueva identidad →
+                </a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ========================================================= -->
+    <!-- VISTA SELECTOR DE IDENTIDADES - Selector de Cuentas      -->
+    <!-- ========================================================= -->
+    <div id="account-select-view" class="max-w-md w-full bg-darkSurface border border-darkGrey rounded-lg p-6 md:p-8 shadow-2xl relative overflow-hidden auth-view hidden">
+        <div class="auth-icon flex justify-center mb-4">
+            <svg width="64" height="64" viewBox="0 0 64 64">
+                <circle cx="32" cy="32" r="30" fill="none" stroke="#00ffff" stroke-width="1" opacity="0.5"/>
+                <text x="32" y="38" text-anchor="middle" fill="#00ffff" font-size="12">👥</text>
+            </svg>
+        </div>
+        
+        <h2 class="text-center font-bold tracking-widest text-lg neon-text-cyan mb-1 uppercase font-mono">[ SELECCIONAR IDENTIDAD ]</h2>
+        <p class="text-center text-[9px] text-gray-500 uppercase tracking-widest mb-6">Elige una identidad guardada en este dispositivo</p>
+        
+        <div class="space-y-4 font-mono">
+            <!-- Contenedor de cuentas guardadas -->
+            <div id="saved-accounts-list" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                <!-- Se llena dinámicamente -->
+            </div>
+            
+            <div class="border-t border-darkGrey/40 pt-4 space-y-2">
+                <button id="btn-use-other-account" class="btn-cyber w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-all uppercase">
+                    [+] ACCEDER CON OTRA IDENTIDAD
+                </button>
+                <button id="btn-forget-all-accounts" class="w-full text-center text-[9px] text-red-400 hover:text-red-500 font-bold uppercase transition-colors pt-2">
+                    🗑️ OLVIDAR TODAS LAS IDENTIDADES
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ============================================ -->
+    <!-- VISTA REGISTRO - Estilo "Creación de Llave"  -->
+    <!-- ============================================ -->
+    <div id="register-view" class="max-w-md w-full bg-darkSurface border border-darkGrey rounded-lg p-6 md:p-8 shadow-2xl relative overflow-hidden auth-view hidden">
+        <!-- Ícono de llave generándose -->
+        <div class="auth-icon register-icon flex justify-center mb-4">
+            <svg width="64" height="64" viewBox="0 0 64 64">
+                <rect x="20" y="28" width="24" height="3" fill="#ff00ff" opacity="0.8"/>
+                <rect x="24" y="24" width="16" height="3" fill="#ff00ff" opacity="0.6"/>
+                <rect x="28" y="20" width="8" height="3" fill="#ff00ff" opacity="0.4"/>
+                <circle cx="32" cy="42" r="8" fill="none" stroke="#ff00ff" stroke-width="2"/>
+                <text x="32" y="46" text-anchor="middle" fill="#ff00ff" font-size="10">🔑</text>
+            </svg>
+        </div>
+        
+        <h2 class="text-center font-bold tracking-widest text-lg neon-text-magenta pulse-effect mb-1 uppercase font-mono">[ GENERAR IDENTIDAD ]</h2>
+        <p class="text-center text-[9px] text-gray-500 uppercase tracking-widest mb-6">Crea tu llave criptográfica única</p>
+        
+        <div class="space-y-4 font-mono">
+            <div class="space-y-1">
+                <label class="text-[9px] text-gray-500 uppercase tracking-widest block font-bold">&gt; ELEGIR ALIAS:</label>
+                <input type="text" id="register-alias" class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-bold text-xs uppercase input-cyber input-magenta" 
+                       placeholder="nombre_único">
+                <span class="text-[8px] text-gray-500 block">&gt; Este será tu identificador público</span>
+            </div>
+            
+            <div class="space-y-1">
+                <label class="text-[9px] text-gray-500 uppercase tracking-widest block font-bold">&gt; CREAR CLAVE (mín. 12 caracteres):</label>
+                <div class="relative password-input-wrapper">
+                    <input type="password" id="register-password" class="w-full bg-black border border-darkGrey rounded pl-3 pr-10 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-bold text-xs input-cyber input-magenta" 
+                           placeholder="contraseña_segura">
+                    <button class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-terminalGreen font-mono text-[10px] select-none toggle-password" 
+                            onclick="togglePasswordVisibility('register-password')" title="Mostrar contraseña">
+                        👁️
+                    </button>
+                </div>
+                <!-- Medidor de fortaleza -->
+                <div class="password-strength-meter hidden" id="password-strength">
+                    <div class="strength-bar" id="strength-bar"></div>
+                    <span class="text-[8px] text-gray-500 block mt-1" id="strength-text"></span>
+                </div>
+            </div>
+            
+            <div class="space-y-1">
+                <label class="text-[9px] text-gray-500 uppercase tracking-widest block font-bold">&gt; CONFIRMAR CLAVE:</label>
+                <div class="relative password-input-wrapper">
+                    <input type="password" id="register-password-confirm" class="w-full bg-black border border-darkGrey rounded pl-3 pr-10 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-bold text-xs input-cyber input-magenta" 
+                           placeholder="repite_la_contraseña">
+                    <button class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-terminalGreen font-mono text-[10px] select-none toggle-password" 
+                            onclick="togglePasswordVisibility('register-password-confirm')" title="Mostrar contraseña">
+                        👁️
+                    </button>
+                </div>
+                <span id="password-match-indicator" class="match-indicator hidden text-[8px]"></span>
+            </div>
+            
+            <div class="space-y-1 pt-2">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="register-terms" class="cyber-checkbox mt-0.5">
+                    <span class="text-[8px] text-gray-400 leading-normal uppercase">
+                        Entiendo que si pierdo mi contraseña, <span class="text-yellow-500 font-bold">NADIE podrá recuperar mis datos</span>.
+                    </span>
+                </label>
+            </div>
+            
+            <button id="register-submit" class="btn-cyber btn-magenta w-full bg-darkMuted border text-purple-400 font-bold py-2.5 rounded text-[10px] tracking-widest transition-all uppercase" disabled style="opacity: 0.5; cursor: not-allowed;">
+                [ CREAR IDENTIDAD CIFRADA ]
+            </button>
+            
+            <div class="text-center text-[10px] pt-4 border-t border-darkGrey/40 space-y-1">
+                <p class="text-gray-500">¿Ya tienes identidad?</p>
+                <a href="#" onclick="showLoginView()" class="text-purple-400 hover:underline neon-link">
+                    ← Volver a inicio de sesión
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- VIEW: CHAT -->
+
+      <div id="view-chat" class="hidden flex-grow flex border border-darkGrey rounded-lg overflow-hidden shadow-2xl bg-black">
+
+
+
+        <!-- SIDEBAR PANEL -->
+
+        <div id="sidebar-panel" class="w-full md:w-80 border-r border-darkGrey bg-darkSurface flex flex-col shrink-0">
+
+          <!-- Header -->
+
+          <div class="p-3 border-b border-darkGrey bg-black/40 flex items-center justify-between">
+
+            <div class="flex items-center gap-2 min-w-0">
+
+              <div class="w-8 h-8 rounded-full bg-darkMuted border border-darkGrey flex items-center justify-center text-xs font-bold text-white uppercase select-none shrink-0" id="my-avatar">U</div>
+
+              <div class="min-w-0">
+
+                <span id="current-user-name" class="font-bold text-xs text-white block truncate">@Alias</span>
+
+                <span class="text-[8px] text-terminalGreen font-bold font-mono">ML-KEM: ACTIVO</span>
+
+              </div>
+
+            </div>
+
+            <div class="flex gap-1 shrink-0">
+
+              <button id="btn-open-add-modal" class="text-gray-500 hover:text-terminalGreen p-1.5 transition-colors" title="Agregar contacto">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                </svg>
+              </button>
+
+              <button id="btn-profile" class="text-gray-500 hover:text-terminalGreen p-1.5 transition-colors" title="Configuracion">
+
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+
+              </button>
+
+              <button onclick="window.hermesTour.start(true)" class="text-cyan-400 hover:text-cyan-300 font-mono text-xs font-bold px-1 py-0.5 border border-cyan-500/30 rounded" title="Tour y Blindaje">?</button>
+              <span id="security-status" onclick="window.hermesTour.start(true)" class="cursor-pointer text-sm select-none" title="Blindaje paranoico 10/10 activo">🟢</span>
+
+            </div>
+
+          </div>
+
+          <!-- Contact lists -->
+
+          <div class="flex-grow overflow-y-auto flex flex-col">
+
+            <div id="requests-section" class="hidden">
+
+              <div class="px-3 py-1.5 text-[8px] font-mono text-yellow-500/80 uppercase tracking-widest border-b border-darkGrey/40 bg-yellow-900/5">SOLICITUDES RECIBIDAS</div>
+
+              <div id="requests-list" class="divide-y divide-darkGrey/30"></div>
+
+            </div>
+
+            <div id="pending-section" class="hidden">
+
+              <div class="px-3 py-1.5 text-[8px] font-mono text-gray-500 uppercase tracking-widest border-b border-darkGrey/40">SOLICITUDES ENVIADAS</div>
+
+              <div id="pending-list" class="divide-y divide-darkGrey/30"></div>
+
+            </div>
+
+            <div id="groups-section" class="mt-2">
+
+              <div class="px-3 py-1.5 text-[8px] font-mono text-purple-400 uppercase tracking-widest border-b border-darkGrey/40 flex justify-between items-center bg-purple-950/5">
+
+                <span>GRUPOS ACTIVOS</span>
+
+                <button id="btn-open-create-group" onclick="openCreateGroupModal()" class="text-purple-300 hover:text-white font-bold text-[9px] tracking-normal font-mono">[ + NUEVO ]</button>
+
+              </div>
+
+              <div id="groups-list" class="divide-y divide-darkGrey/40"></div>
+
+            </div>
+
+            <div class="px-3 py-1.5 text-[8px] font-mono text-terminalGreen/60 uppercase tracking-widest border-b border-darkGrey/40 mt-2">CANALES ACTIVOS</div>
+
+            <div id="contacts-list" class="divide-y divide-darkGrey/40 flex-grow"></div>
+
+          </div>
+
+        </div>
+
+
+
+        <!-- CHAT PANEL -->
+
+        <div id="chat-panel" class="flex-grow flex flex-col bg-black min-w-0">
+
+          <!-- Chat Header -->
+
+          <header class="p-2 md:p-3 border-b border-darkGrey bg-darkSurface flex items-center justify-between gap-2">
+
+            <div class="flex items-center gap-2 min-w-0">
+
+              <button id="btn-back-to-contacts" class="text-gray-500 hover:text-terminalGreen p-1 transition-colors shrink-0">
+
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+
+              </button>
+
+              <div class="w-9 h-9 rounded-full bg-darkMuted border border-darkGrey flex items-center justify-center text-xs font-bold text-white uppercase select-none shrink-0" id="active-contact-avatar">?</div>
+
+              <div class="min-w-0">
+
+                <h2 id="chat-header-title" class="font-bold text-white text-xs truncate">Selecciona un chat</h2>
+
+                <p id="chat-header-status" class="text-[8px] text-gray-500 font-mono uppercase">CANAL DESACOPLADO</p>
+                <div class="encryption-indicator mt-1">E2EE PQC ACTIVO</div>
+              </div>
+
+            </div>
+
+            <div class="flex gap-1 shrink-0">
+
+              <button id="btn-delete-conversation" disabled class="hidden text-[8px] bg-red-950/20 border border-red-900/40 hover:border-red-500 text-red-400 px-2 py-1 rounded font-bold transition-all uppercase">BORRAR</button>
+
+              <button id="btn-delete-contact" disabled class="hidden text-[8px] bg-red-950/20 border border-red-900/40 hover:border-red-500 text-red-400 px-2 py-1 rounded font-bold transition-all uppercase">ELIMINAR</button>
+
+              <button id="btn-block-contact" disabled class="hidden text-[8px] bg-red-950/20 border border-red-900/40 hover:border-red-500 text-red-400 px-2 py-1 rounded font-bold transition-all uppercase">BLOQUEAR</button>
+<button id="btn-add-group-member" class="hidden text-[8px] bg-purple-950/20 border border-purple-900/40 hover:border-purple-500 text-purple-400 px-2 py-1 rounded font-bold transition-all uppercase">[+ AGREGAR]</button>
+<button id="btn-edit-group-config" class="hidden text-[8px] bg-purple-950/20 border border-purple-900/40 hover:border-purple-500 text-purple-400 px-2 py-1 rounded font-bold transition-all uppercase">[✏️ CONFIG]</button>
+
+            </div>
+
+          </header>
+
+
+
+          <!-- Messages -->
+
+          <div id="chat-messages" class="flex-grow p-3 md:p-4 overflow-y-auto space-y-3 flex flex-col bg-black">
+
+            <div class="text-center text-xs text-gray-600 my-auto uppercase font-mono tracking-wider">[!] Selecciona un chat para abrir el canal seguro.</div>
+
+          </div>
+
+
+
+          <!-- Footer (input) -->
+
+          <div id="chat-footer" class="hidden p-2 md:p-3 border-t border-darkGrey bg-darkSurface flex flex-col gap-2 relative">
+
+            <!-- Emoji picker -->
+
+            <div id="emoji-picker" class="hidden absolute bottom-20 left-2 bg-darkSurface border border-darkGrey rounded shadow-2xl p-2 w-52 grid grid-cols-6 gap-1 z-50 text-sm">
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">😀</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">😂</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🥰</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">😎</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🤔</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🤫</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">👍</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">❤️</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🔥</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🎉</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">👀</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🚀</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">🔒</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">💻</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">💥</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">👻</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">💯</button>
+              <button class="emoji-btn hover:bg-black/40 p-1 rounded">⚠️</button>
+            </div>
+            <!-- Barra de mensajes (Bug 1) -->
+            <div class="message-input-container">
+                <!-- Input de texto (visible por defecto) -->
+                <div id="text-input-area" class="input-area flex items-center gap-2">
+                    <button id="btn-emoji-toggle" class="bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 text-xs" title="Emojis">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    </button>
+                    <button id="btn-send-photo" class="bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 text-xs" title="Enviar foto">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                    </button>
+                    <input type="file" id="photo-input" accept="image/*" class="hidden" />
+                    <button id="btn-view-once-toggle" class="w-8 h-8 rounded-full flex items-center justify-center border border-darkGrey text-gray-600 hover:border-orange-500 hover:text-orange-400 transition-colors shrink-0 text-xs" title="Vista unica (burn)">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                    </button>
+                    <input type="text" id="chat-input" placeholder="Mensaje seguro..." disabled class="flex-grow bg-black border border-darkGrey rounded-full px-4 py-2 text-xs text-white focus:outline-none focus:border-terminalGreen placeholder-gray-700 disabled:opacity-40 font-sans min-w-0" />
+                    <!-- Botón de grabación de audio -->
+                    <button id="btn-record-audio" class="w-8 h-8 rounded-full flex items-center justify-center border border-red-500/30 text-red-400 hover:border-red-500 hover:bg-red-500/10 transition-colors shrink-0 text-sm" title="Grabar audio">
+                        🎤
+                    </button>
+                    <button id="btn-send" disabled class="bg-terminalGreen text-black hover:bg-white w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs disabled:opacity-40 transition-colors shadow shrink-0">
+                        ▶
+                    </button>
+                </div>
+
+                <!-- Área de grabación de audio (oculta por defecto) -->
+                <div id="audio-input-area" class="input-area hidden flex items-center gap-2 mt-2 w-full">
+                    <button id="btn-cancel-audio" class="w-8 h-8 rounded-full flex items-center justify-center border border-red-500 text-red-500 hover:bg-red-500/10 transition-colors shrink-0" title="Cancelar">
+                        ❌
+                    </button>
+                    <div class="audio-recording-bar flex flex-grow items-center gap-2 px-3 py-1 bg-red-950/20 border border-red-500/40 rounded-full">
+                        <div class="flex items-center gap-2 min-w-[60px]">
+                            <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                            <span id="recording-timer" class="text-red-400 font-mono text-xs tabular-nums">00:00</span>
+                        </div>
+                        <div id="audio-wave" class="flex-grow flex items-center gap-[2px] h-6 overflow-hidden">
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 30%"></div>
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 60%"></div>
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 40%"></div>
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 80%"></div>
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 50%"></div>
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 70%"></div>
+                            <div class="wave-bar bg-red-400/80 rounded-[1px]" style="width:2px; height: 35%"></div>
+                        </div>
+                        <div class="flex items-center gap-1 shrink-0">
+                            <button id="btn-stop-recording" class="w-6 h-6 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors" title="Detener y enviar">
+                                ⏹️
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- SECURITY DIAGNOSTICS PANEL -->
+    <div id="security-diagnostics" class="hidden absolute top-4 left-4 bg-darkSurface border border-darkGrey rounded-lg p-4 shadow-2xl z-50 text-[10px] font-mono w-72">
+        <div class="flex justify-between items-center mb-3 pb-2 border-b border-darkGrey">
+            <h3 class="text-xs font-bold text-white tracking-widest uppercase">&gt; SECURITY_DIAGNOSTICS</h3>
+            <button onclick="document.getElementById('security-diagnostics').classList.add('hidden')" class="text-gray-500 hover:text-white font-bold">[X]</button>
+        </div>
+        
+        <div class="space-y-2">
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">WASM Module</span>
+                <span id="diag-wasm" class="text-gray-500">⏳ Verificando...</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">WASM Hash</span>
+                <span id="diag-wasm-hash" class="text-gray-500">⏳ Calculando...</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">X3DH Handshake</span>
+                <span id="diag-x3dh" class="text-gray-500">⏳ Pendiente</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">Double Ratchet</span>
+                <span id="diag-ratchet" class="text-gray-500">⏳ No iniciado</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">Connection</span>
+                <span id="diag-connection" class="text-gray-500">⏳ Evaluando...</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">Nonce Reuse Detector</span>
+                <span id="diag-nonce" class="text-gray-500">⏳ Inicializando...</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">Last Scan</span>
+                <span id="diag-scan" class="text-gray-500">⏳ -</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: ADD CONTACT -->
+
+    <div id="add-contact-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-40 hidden opacity-0 transition-opacity duration-300">
+
+      <div class="bg-darkSurface border border-darkGrey rounded-lg max-w-sm w-full p-6 shadow-2xl relative">
+
+        <button id="btn-close-add-modal" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+
+        <h3 class="text-xs font-bold text-white tracking-widest mb-1 uppercase font-mono">&gt; ENVIAR SOLICITUD DE CONTACTO</h3>
+
+        <p class="text-[9px] text-gray-500 font-mono mb-4">La otra persona debera aceptar para iniciar el canal.</p>
+
+        <div class="space-y-4">
+
+          <div class="space-y-1">
+
+            <label for="add-contact-name" class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block">&gt; ALIAS DEL DESTINATARIO:</label>
+
+            <input type="text" id="add-contact-name" placeholder="ALIAS..." class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-mono text-xs uppercase" />
+
+          </div>
+
+          <div id="add-contact-error" class="hidden text-[9px] text-red-400 font-mono"></div>
+
+          <button id="btn-add-contact" class="w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ ENVIAR SOLICITUD ]</button>
+
+        </div>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- MODAL: SETTINGS / PROFILE -->
+
+    <div id="settings-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+
+      <div class="bg-darkSurface border border-darkGrey rounded-lg max-w-sm w-full shadow-2xl relative overflow-hidden">
+
+        <button id="btn-close-settings-modal" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+
+        <!-- Profile section -->
+
+        <div class="p-5 border-b border-darkGrey">
+
+          <h3 class="text-xs font-bold text-white tracking-widest uppercase font-mono mb-4">&gt; PERFIL Y CONFIGURACION</h3>
+
+          <div class="flex items-center gap-3 mb-5">
+
+            <div class="w-12 h-12 rounded-full bg-darkMuted border border-terminalGreen/30 flex items-center justify-center text-lg font-bold text-white uppercase select-none shrink-0" id="settings-avatar">U</div>
+
+            <div>
+
+              <p id="settings-username" class="font-bold text-sm text-white font-mono">@alias</p>
+
+              <p class="text-[8px] text-terminalGreen font-mono">CANAL SEGURO ACTIVO</p>
+
+            </div>
+
+          </div>
+
+          <!-- Change alias -->
+
+          <div class="space-y-2">
+
+            <label class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block">&gt; CAMBIAR ALIAS:</label>
+
+            <input type="text" id="new-alias-input" placeholder="NUEVO ALIAS..." class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-mono text-xs uppercase" />
+
+            <input type="password" id="alias-change-pass" placeholder="CONTRASENA ACTUAL..." class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-terminalGreen focus:outline-none focus:border-terminalGreen font-mono text-xs" />
+
+            <div id="alias-change-error" class="hidden text-[9px] text-red-400 font-mono"></div>
+
+            <div id="alias-change-ok" class="hidden text-[9px] text-terminalGreen font-mono"></div>
+
+            <button id="btn-confirm-rename" class="w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ APLICAR CAMBIO DE ALIAS ]</button>
+
+          </div>
+
+        </div>
+
+        <!-- Logout + Disable -->
+
+        <div class="p-5 space-y-2">
+
+          <button id="btn-settings-logout" class="w-full text-left px-3 py-2.5 text-gray-300 hover:bg-black/40 transition-colors rounded border border-darkGrey/40 text-[10px] font-mono font-bold flex items-center gap-2">
+
+            <span class="text-terminalGreen">X</span> CERRAR SESION
+
+          </button>
+
+          <button id="btn-backup-settings" onclick="const bm=document.getElementById('backup-modal'); bm.classList.remove('hidden'); setTimeout(()=>bm.classList.remove('opacity-0'),10);" class="w-full text-left px-3 py-2.5 text-blue-300 hover:bg-black/40 transition-colors rounded border border-darkGrey/40 text-[10px] font-mono font-bold flex items-center gap-2">
+            <span>💾</span> GESTIONAR BACKUPS
+          </button>
+
+          <button id="btn-settings-disable" class="w-full text-left px-3 py-2.5 text-red-400 hover:bg-red-950/20 transition-colors rounded border border-red-900/40 text-[10px] font-mono font-bold flex items-center gap-2">
+
+            <span>DANGER</span> DESHABILITAR CUENTA
+
+          </button>
+
+        </div>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- MODAL: INSPECT MESSAGE -->
+
+    <div id="inspector-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+
+      <div class="bg-darkSurface border border-darkGrey rounded-lg max-w-2xl w-full p-5 shadow-2xl relative flex flex-col max-h-[90vh] overflow-hidden">
+
+        <button onclick="closeInspector()" class="absolute top-4 right-4 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+
+        <h3 class="text-xs font-bold text-white tracking-widest mb-3 uppercase font-mono">&gt; FORENSIC_DATA_AUDIT</h3>
+
+        <div class="flex border-b border-darkGrey mb-3 text-[10px] font-mono">
+
+          <button id="tab-btn-envelope" onclick="switchInspectorTab('envelope')" class="px-3 py-1.5 border-b-2 border-terminalGreen text-white font-medium">[ RAW_ENVELOPE ]</button>
+
+          <button id="tab-btn-crypto" onclick="switchInspectorTab('crypto')" class="px-3 py-1.5 border-b-2 border-transparent text-gray-500 hover:text-white font-medium">[ CRYPTO_PROOF ]</button>
+
+          <button id="tab-btn-stego" onclick="switchInspectorTab('stego')" class="px-3 py-1.5 border-b-2 border-transparent text-gray-500 hover:text-white font-medium">[ STEGO_SVG ]</button>
+
+        </div>
+
+        <div class="flex-grow overflow-y-auto text-xs space-y-3">
+
+          <div id="tab-content-envelope" class="space-y-2">
+
+            <p class="text-[10px] text-gray-500 uppercase tracking-widest font-mono">&gt; METADATA_PAQUETE:</p>
+
+            <pre id="inspect-json" class="bg-black p-3 border border-darkGrey rounded text-[10px] text-terminalGreen overflow-x-auto whitespace-pre-wrap select-all max-h-60 font-mono"></pre>
+
+          </div>
+
+          <div id="tab-content-crypto" class="hidden space-y-2.5">
+
+            <div class="bg-black border border-darkGrey rounded p-3 space-y-2.5 font-mono text-[10px]">
+
+              <div class="flex items-start gap-2"><span class="text-terminalGreen">OK</span><div><p class="font-bold text-white">KEY_ENCAPSULATION (ML-KEM-1024)</p><p class="text-gray-500">Secreto compartido encapsulado cuanticamente.</p></div></div>
+
+              <div class="flex items-start gap-2"><span class="text-terminalGreen">OK</span><div><p class="font-bold text-white">DATA_INTEGRITY (AES-256-GCM + AAD)</p><p class="text-gray-500">AAD: <code class="bg-darkMuted px-1 rounded text-terminalGreen" id="inspect-aad-val">...</code></p></div></div>
+
+              <div class="flex items-start gap-2"><span class="text-terminalGreen">OK</span><div><p class="font-bold text-white">DIGITAL_SIGNATURE (SPHINCS+-SHA2-128f)</p><p class="text-gray-500">Firma post-cuantica validada.</p></div></div>
+
+            </div>
+
+          </div>
+
+          <div id="tab-content-stego" class="hidden space-y-3">
+
+            <p class="text-[10px] text-gray-500 uppercase tracking-widest font-mono">&gt; STEGO_CONTAINER:</p>
+
+            <div id="inspect-stego-view" class="w-48 h-48 mx-auto bg-black border border-darkGrey rounded overflow-hidden flex items-center justify-center"></div>
+
+            <textarea id="inspect-stego-svg" readonly class="w-full h-24 bg-black border border-darkGrey rounded p-2 text-[9px] text-terminalGreen font-mono focus:outline-none resize-none"></textarea>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- MODAL: DISABLE ACCOUNT -->
+
+    <div id="disable-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-60 hidden opacity-0 transition-opacity duration-300">
+
+      <div class="bg-darkSurface border border-red-500/30 rounded-lg max-w-sm w-full p-5 shadow-2xl relative space-y-4">
+
+        <button id="btn-close-disable-modal" class="absolute top-4 right-4 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+
+        <h3 class="text-xs font-bold text-red-500 tracking-widest uppercase font-mono">&gt; DESHABILITAR CUENTA PERMANENTE</h3>
+
+        <p class="text-[10px] text-gray-400 font-mono uppercase leading-relaxed">Esta accion eliminara tus llaves, mensajes, contactos e identidad. Sin marcha atras.</p>
+
+        <div class="space-y-1">
+
+          <label for="disable-pass-input" class="text-[8px] text-gray-500 uppercase tracking-widest block font-bold">&gt; CONFIRMA TU CONTRASENA:</label>
+
+          <input type="password" id="disable-pass-input" placeholder="CONTRASENA..." class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-red-500 focus:outline-none focus:border-red-500 font-bold text-xs" />
+
+        </div>
+
+        <button id="btn-confirm-disable" class="w-full bg-red-950/20 hover:bg-red-600 hover:text-white border border-red-900/60 text-red-400 font-bold py-2 rounded text-[10px] tracking-widest transition-all">[ CONFIRMAR DESTRUCCION DE DATOS ]</button>
+
+      </div>
+
+    </div>
+
+
+
+    <!-- MODAL: VIEW-ONCE IMAGE -->
+
+    <div id="view-once-modal" class="fixed inset-0 bg-black/98 flex items-center justify-center z-70 hidden">
+
+      <div class="relative max-w-screen-md w-full p-4 flex flex-col items-center gap-4">
+
+        <!-- Timer bar (barra de tiempo regresiva) -->
+        <div class="w-full bg-gray-800 rounded-full overflow-hidden">
+          <div id="view-once-timer-bar"></div>
+        </div>
+
+        <p class="text-[9px] font-mono text-orange-400 uppercase tracking-widest">IMAGEN DE VISTA UNICA - SE DESTRUIRA AL CERRAR</p>
+
+        <img id="view-once-img" src="" alt="Vista unica" class="max-w-full max-h-[70vh] rounded border border-orange-500/30 block select-none" draggable="false" />
+
+        <button id="btn-close-view-once" class="bg-red-900/40 hover:bg-red-600 border border-red-500 text-red-300 font-bold py-2 px-6 rounded text-[10px] font-mono tracking-widest transition-all">[ CERRAR Y DESTRUIR ]</button>
+
+      </div>
+
+    </div>
+
+
+
+    
+    <!-- MODAL: CREATE GROUP -->
+<div id="create-group-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+  <div class="bg-darkSurface border border-purple-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
+    <button onclick="document.getElementById('create-group-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+    <h3 class="text-xs font-bold text-purple-400 tracking-widest mb-1 uppercase font-mono">&gt; CREAR GRUPO</h3>
+    <p class="text-[9px] text-gray-500 font-mono mb-4">Crea un canal seguro grupal de 3+ usuarios.</p>
+    <div class="space-y-4">
+      <div class="space-y-1">
+        <label class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block">&gt; NOMBRE DEL GRUPO:</label>
+        <input type="text" id="cg-name" placeholder="NOMBRE..." class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-purple-300 focus:outline-none focus:border-purple-500 font-mono text-xs uppercase" />
+      </div>
+      <div class="space-y-1">
+        <label class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block">&gt; SELECCIONAR MIEMBROS:</label>
+        <div id="create-group-members-list" class="max-h-24 overflow-y-auto space-y-1.5 pr-1">
+          <!-- Dynamically populated contacts checklist -->
+        </div>
+      </div>
+      <button id="btn-submit-create-group" onclick="submitCreateGroup()" class="w-full bg-purple-950/20 hover:bg-purple-600 hover:text-white border border-purple-500/40 text-purple-300 font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ CREAR GRUPO ]</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: EDIT GROUP -->
+    <div id="edit-group-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+      <div class="bg-darkSurface border border-purple-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
+        <button onclick="document.getElementById('edit-group-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <h3 class="text-xs font-bold text-purple-400 tracking-widest mb-1 uppercase font-mono">&gt; EDITAR GRUPO</h3>
+        <p class="text-[9px] text-gray-500 font-mono mb-4">Modificar metadatos del canal grupal.</p>
+        <div class="space-y-4">
+          <div class="space-y-1">
+            <label class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block">&gt; NUEVO NOMBRE:</label>
+            <input type="text" id="edit-group-name" placeholder="NOMBRE..." class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-purple-300 focus:outline-none focus:border-purple-500 font-mono text-xs uppercase" />
+          </div>
+          <button id="btn-save-group-edit" class="w-full bg-purple-950/20 hover:bg-purple-600 hover:text-white border border-purple-500/40 text-purple-300 font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ GUARDAR CAMBIOS ]</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: ADD MEMBER -->
+    <div id="add-member-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+      <div class="bg-darkSurface border border-purple-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
+        <button onclick="document.getElementById('add-member-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <h3 class="text-xs font-bold text-purple-400 tracking-widest mb-1 uppercase font-mono">&gt; AGREGAR MIEMBRO</h3>
+        <p class="text-[9px] text-gray-500 font-mono mb-4">Invitar contacto aceptado al canal grupal.</p>
+        <div class="space-y-4">
+          <div class="space-y-1">
+            <label class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block">&gt; SELECCIONAR CONTACTO:</label>
+            <select id="add-member-select" class="w-full bg-black border border-darkGrey rounded px-3 py-2 text-purple-300 focus:outline-none focus:border-purple-500 font-mono text-xs uppercase">
+              <!-- Dynamically populated -->
+            </select>
+          </div>
+          <button id="btn-confirm-add-member" class="w-full bg-purple-950/20 hover:bg-purple-600 hover:text-white border border-purple-500/40 text-purple-300 font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ AGREGAR AL GRUPO ]</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: BACKUP -->
+    <div id="backup-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+      <div class="bg-darkSurface border border-blue-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
+        <button onclick="const bm=document.getElementById('backup-modal'); bm.classList.add('opacity-0'); setTimeout(()=>bm.classList.add('hidden'),300);" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <h3 class="text-xs font-bold text-blue-400 tracking-widest mb-1 uppercase font-mono">&gt; GESTIÓN DE BACKUPS</h3>
+        <p class="text-[9px] text-gray-500 font-mono mb-4">Crea o restaura copias de seguridad cifradas de tus chats y multimedia.</p>
+        
+        <div class="space-y-4">
+          <div class="flex gap-2">
+            <button id="btn-create-backup" class="flex-1 bg-blue-950/20 hover:bg-blue-600 hover:text-white border border-blue-500/40 text-blue-300 font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ NUEVO BACKUP ]</button>
+            <button onclick="document.getElementById('restore-file-input').click()" class="flex-1 bg-green-950/20 hover:bg-green-600 hover:text-white border border-green-500/40 text-green-300 font-bold py-2 rounded text-[10px] tracking-widest transition-colors font-mono">[ RESTAURAR ]</button>
+            <input type="file" id="restore-file-input" class="hidden" accept=".hermes">
+          </div>
+          
+          <div class="space-y-1">
+            <label class="text-[9px] text-gray-500 uppercase font-mono tracking-widest block border-b border-darkGrey pb-1">&gt; BACKUPS LOCALES:</label>
+            <div id="backups-list-container" class="max-h-32 overflow-y-auto space-y-1.5 pr-1 mt-2">
+              <!-- Dynamically populated backups list -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+  <!-- MODAL: ONBOARDING -->
+<div id="onboarding-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
+  <div class="bg-darkSurface border border-terminalGreen/30 rounded-lg max-w-md w-full p-6 shadow-2xl relative font-mono text-[10px] space-y-4">
+    <button onclick="document.getElementById('onboarding-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold">[X]</button>
+    
+    <h3 class="text-xs font-bold text-terminalGreen tracking-widest uppercase">&gt; ONBOARDING_SYSTEM v7.0</h3>
+    
+    <div class="space-y-3 leading-relaxed">
+      <p class="text-white font-bold">&gt; ¿CÓMO FUNCIONA EL SERVIDOR DE CONOCIMIENTO CERO?</p>
+      <p class="text-gray-400">Todo el descifrado y almacenamiento ocurre localmente en tu navegador. El servidor es un relay ciego que solo procesa hashes y retransmite datos cifrados transitorios en RAM. Nadie, ni el administrador del servidor, puede ver tus mensajes o contactos.</p>
+      
+      <p class="text-white font-bold">&gt; INSTRUCCIONES DE CONTACTO:</p>
+      <p class="text-gray-400">1. Pídele el alias a tu contacto.<br>2. Haz clic en [+ NUEVO] y envía la solicitud.<br>3. Cuando tu contacto acepte, se establecerá el canal cifrado de extremo a extremo.</p>
+      
+      <div class="border-t border-darkGrey pt-3 space-y-2">
+        <label class="text-[9px] text-terminalGreen font-bold block">&gt; Recordatorio de copia de seguridad:</label>
+        <select id="backup-reminder-select" class="w-full bg-black border border-darkGrey rounded px-3 py-1.5 text-terminalGreen focus:outline-none focus:border-terminalGreen font-mono text-xs">
+          <option value="300">Cada 5 minutos (Pruebas)</option>
+          <option value="3600">Cada 1 hora</option>
+          <option value="86400">Cada 1 día</option>
+          <option value="604800">Cada 7 días</option>
+        </select>
+      </div>
+    </div>
+    
+    <button onclick="document.getElementById('onboarding-modal').classList.add('hidden')" class="w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-colors">[ COMENZAR A CHATEAR ]</button>
+  </div>
+</div>
+
+</body>
+
+</html>
+

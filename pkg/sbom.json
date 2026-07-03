@@ -1,0 +1,21 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-07-01T06:52:56Z",
+    "component": {
+      "name": "hermes_crypto_wasm",
+      "version": "none",
+      "type": "library"
+    }
+  },
+  "components": [
+    {
+      "name": "zeroize",
+      "version": "1.7.0",
+      "type": "library",
+      "purl": "pkg:cargo/zeroize@1.7.0"
+    }
+  ]
+}

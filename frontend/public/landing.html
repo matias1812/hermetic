@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermetic - Mensajería Zero-Knowledge Post-Cuántica</title>
+    <meta name="description" content="Hermetic - Mensajería Zero-Knowledge Post-Cuántica. El servidor no puede leer tus mensajes. Técnicamente imposible entregar datos. Cifrado ML-KEM-1024 + SPHINCS+.">
+    <meta name="keywords" content="mensajería segura, zero-knowledge, post-cuántico, cifrado E2E, privacidad, ML-KEM-1024, SPHINCS+, kyber, blindaje legal, código abierto">
+    <meta name="author" content="Hermetic">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://Hermetic.io">
+    <meta property="og:title" content="Hermetic - Mensajería Zero-Knowledge Post-Cuántica">
+    <meta property="og:description" content="El único sistema donde el servidor NO puede leer tus mensajes. Ni aunque un juez lo ordene.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://Hermetic.io">
+    <meta property="og:image" content="https://Hermetic.io/og-image.png">
+    <meta property="og:locale" content="es_ES">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Hermetic - Privacidad Absoluta">
+    <meta name="twitter:description" content="Mensajería que ni el servidor puede leer.">
+    <meta name="twitter:image" content="https://Hermetic.io/og-image.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Hermetic",
+        "applicationCategory": "MessagingApplication",
+        "operatingSystem": "Web",
+        "description": "Mensajería Zero-Knowledge Post-Cuántica con cifrado ML-KEM-1024 y SPHINCS+",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+    }
+    </script>
+    <style>
+        :root {
+            --bg-dark: #050508;
+            --surface: rgba(15, 16, 23, 0.78);
+            --cyan: #00ffff;
+            --magenta: #ff007f;
+            --green: #00ff66;
+            --dim: #a1a1aa;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Courier New', Courier, monospace; }
+        
+        body {
+            background-color: var(--bg-dark);
+            color: #fff;
+            line-height: 1.6;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* ── EFECTO 3D DE MURALLA FUTURISTA REALISTA ─────────────────── */
+        .wall-texture-3d {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            z-index: -2;
+            pointer-events: none;
+            background:
+                radial-gradient(circle at 50% 30%, rgba(0, 255, 183, 0.08) 0%, rgba(5, 5, 8, 0.95) 85%),
+                repeating-linear-gradient(to right, rgba(255,255,255,0.035) 0px, rgba(255,255,255,0.035) 2px, transparent 2px, transparent 140px),
+                repeating-linear-gradient(to bottom, rgba(0,0,0,0.7) 0px, rgba(0,0,0,0.7) 4px, transparent 4px, transparent 70px),
+                linear-gradient(135deg, rgba(0, 255, 102, 0.04) 25%, transparent 25%),
+                linear-gradient(225deg, rgba(0, 255, 255, 0.04) 25%, transparent 25%);
+            background-size: 100% 100%, 140px 70px, 140px 70px, 70px 70px, 70px 70px;
+            box-shadow: inset 0 0 150px rgba(0, 0, 0, 0.95);
+        }
+
+        /* ── CANVAS DE MATRIX RAIN ───────────────────────────────────── */
+        #matrix-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: -3;
+            pointer-events: none;
+            opacity: 0.65;
+        }
+
+        .landing-header {
+            padding: 1.2rem 5%;
+            border-bottom: 1px solid rgba(0, 255, 255, 0.3);
+            background: rgba(8, 9, 14, 0.88);
+            backdrop-filter: blur(14px);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 4px 30px rgba(0, 255, 255, 0.1);
+        }
+        nav { display: flex; justify-content: space-between; align-items: center; max-width: 1200px; margin: 0 auto; }
+        .logo { font-size: 1.6rem; font-weight: 900; color: var(--cyan); text-shadow: 0 0 15px var(--cyan); letter-spacing: 2px; }
+        .nav-links { display: flex; align-items: center; gap: 1.8rem; }
+        .nav-links a { color: #fff; text-decoration: none; transition: all 0.3s; font-size: 0.9rem; font-weight: bold; }
+        .nav-links a:hover { color: var(--cyan); text-shadow: 0 0 8px var(--cyan); }
+        .btn-launch {
+            background: var(--cyan);
+            color: #000 !important;
+            padding: 0.6rem 1.4rem;
+            border-radius: 6px;
+            font-weight: 900;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.6);
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+        .btn-launch:hover {
+            transform: scale(1.05);
+            background: #fff;
+            box-shadow: 0 0 25px rgba(255, 255, 255, 0.9);
+        }
+
+        .hero { min-height: 85vh; display: flex; align-items: center; justify-content: space-between; max-width: 1200px; margin: 0 auto; padding: 4rem 5%; gap: 2rem; }
+        .hero-title { font-size: 3.2rem; line-height: 1.25; margin-bottom: 1.5rem; font-weight: 900; }
+        .neon-text-cyan { color: var(--cyan); text-shadow: 0 0 20px var(--cyan); }
+        .neon-text-magenta { color: var(--magenta); text-shadow: 0 0 20px var(--magenta); }
+        .hero-subtitle { font-size: 1.15rem; color: #d4d4dc; max-width: 580px; margin-bottom: 2.5rem; text-shadow: 0 2px 4px rgba(0,0,0,0.8); }
+        .hero-actions { display: flex; gap: 1.5rem; flex-wrap: wrap; }
+        .btn-cyber-lg {
+            background: linear-gradient(45deg, var(--cyan), var(--green));
+            color: #000;
+            padding: 1.1rem 2.2rem;
+            text-decoration: none;
+            font-weight: 900;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            box-shadow: 0 0 25px rgba(0, 255, 183, 0.5);
+            transition: all 0.3s;
+        }
+        .btn-cyber-lg:hover { transform: translateY(-3px); box-shadow: 0 0 35px rgba(0, 255, 183, 0.8); }
+        .btn-outline {
+            border: 2px solid var(--cyan);
+            color: var(--cyan);
+            padding: 1.1rem 2.2rem;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 6px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background: rgba(0, 255, 255, 0.05);
+            backdrop-filter: blur(5px);
+            transition: all 0.3s;
+        }
+        .btn-outline:hover { background: var(--cyan); color: #000; box-shadow: 0 0 20px var(--cyan); }
+        
+        .hero-visual {
+            font-size: 9rem;
+            filter: drop-shadow(0 0 40px var(--cyan));
+            animation: float 5s ease-in-out infinite;
+        }
+        @keyframes float { 0%, 100% { transform: translateY(0px) rotate(0deg); } 50% { transform: translateY(-20px) rotate(3deg); } }
+
+        .trust-badges { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 2rem; max-width: 1200px; margin: 3rem auto; padding: 0 5%; }
+        .badge {
+            background: var(--surface);
+            backdrop-filter: blur(12px);
+            padding: 2.2rem;
+            border: 1px solid rgba(0, 255, 255, 0.25);
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.7);
+            transition: transform 0.3s, border-color 0.3s;
+        }
+        .badge:hover { transform: translateY(-6px); border-color: var(--green); box-shadow: 0 15px 35px rgba(0, 255, 102, 0.2); }
+        .badge-icon { font-size: 2.8rem; display: block; margin-bottom: 1rem; }
+        .badge strong { color: var(--cyan); font-size: 1.2rem; display: block; margin-bottom: 0.5rem; text-shadow: 0 0 8px rgba(0,255,255,0.4); }
+        .badge p { color: var(--dim); font-size: 0.9rem; }
+
+        .section { padding: 5rem 5%; max-width: 1200px; margin: 0 auto; position: relative; z-index: 1; }
+        .section.dark { background: rgba(10, 11, 16, 0.85); backdrop-filter: blur(14px); max-width: 100%; padding-left: calc(5% + (100vw - 1200px)/2); padding-right: calc(5% + (100vw - 1200px)/2); border-top: 1px solid rgba(0,255,255,0.15); border-bottom: 1px solid rgba(0,255,255,0.15); }
+        .section-title { font-size: 2.4rem; color: var(--cyan); margin-bottom: 3.5rem; text-align: center; text-shadow: 0 0 15px var(--cyan); font-weight: 900; }
+        
+        .about-grid, .security-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; }
+        .about-card, .security-item {
+            background: var(--surface);
+            backdrop-filter: blur(12px);
+            padding: 2.2rem;
+            border-left: 4px solid var(--cyan);
+            border-radius: 8px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.6);
+            transition: all 0.3s;
+        }
+        .about-card:hover, .security-item:hover { border-left-color: var(--green); transform: translateX(5px); }
+        .about-card h3, .security-item h4 { color: #fff; margin-bottom: 1rem; font-size: 1.3rem; }
+        .text-dim { color: var(--dim); font-size: 0.9rem; margin-top: 0.6rem; }
+        
+        .tech-stack { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.8rem; }
+        .tech-item {
+            background: var(--surface);
+            backdrop-filter: blur(10px);
+            border: 1px dashed rgba(0, 255, 255, 0.4);
+            padding: 1.8rem;
+            border-radius: 8px;
+            transition: all 0.3s;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+        }
+        .tech-item:hover { border-color: var(--green); transform: scale(1.02); }
+        .tech-item strong { display: block; color: var(--green); margin-bottom: 0.6rem; font-size: 1.15rem; text-shadow: 0 0 8px rgba(0,255,102,0.3); }
+        .tech-item span { color: #ccc; font-size: 0.9rem; }
+
+        .faq-list { max-width: 850px; margin: 0 auto; }
+        .faq-item {
+            background: var(--surface);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(0,255,255,0.2);
+            border-radius: 8px;
+            margin-bottom: 1.2rem;
+            padding: 1.5rem;
+        }
+        .faq-item summary { cursor: pointer; font-weight: bold; color: var(--cyan); list-style: none; font-size: 1.1rem; }
+        .faq-item p { margin-top: 1rem; color: #d4d4dc; font-size: 0.95rem; }
+
+        .cta-section { text-align: center; padding: 7rem 5%; background: linear-gradient(180deg, transparent, rgba(15,16,23,0.95)); position: relative; z-index: 1; }
+        .cta-section h2 { font-size: 2.8rem; color: #fff; margin-bottom: 1rem; font-weight: 900; text-shadow: 0 0 15px rgba(255,255,255,0.5); }
+        .cta-section p { color: var(--dim); margin-bottom: 3rem; font-size: 1.2rem; }
+        .btn-cyber-xl {
+            background: var(--cyan);
+            color: #000;
+            padding: 1.3rem 3.5rem;
+            text-decoration: none;
+            font-weight: 900;
+            font-size: 1.3rem;
+            border-radius: 8px;
+            box-shadow: 0 0 35px var(--cyan);
+            display: inline-block;
+            transition: all 0.3s;
+            text-transform: uppercase;
+        }
+        .btn-cyber-xl:hover { transform: scale(1.06); background: #fff; box-shadow: 0 0 45px rgba(255,255,255,0.9); }
+
+        footer { text-align: center; padding: 3rem 5%; border-top: 1px solid rgba(0,255,255,0.2); background: #050508; position: relative; z-index: 10; }
+        @media (max-width: 768px) {
+            .hero { flex-direction: column; text-align: center; justify-content: center; }
+            .hero-actions { justify-content: center; }
+            .hero-title { font-size: 2.2rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- TEXTURA 3D DE MURALLA Y LLUVIA MATRIX REALISTA -->
+    <canvas id="matrix-canvas"></canvas>
+    <div class="wall-texture-3d"></div>
+
+    <header class="landing-header">
+        <nav>
+            <div class="logo">🜁 Hermetic</div>
+            <div class="nav-links">
+                <a href="#about">Acerca de</a>
+                <a href="#security">Seguridad</a>
+                <a href="#technology">Tecnología</a>
+                <a href="#faq">FAQ</a>
+                <a href="/app" class="btn-launch">Abrir App</a>
+            </div>
+        </nav>
+    </header>
+    
+    <section class="hero">
+        <div class="hero-content">
+            <h1 class="hero-title">
+                Mensajería <span class="neon-text-cyan">Zero-Knowledge</span><br>
+                Resistente a <span class="neon-text-magenta">Computación Cuántica</span>
+            </h1>
+            <p class="hero-subtitle">
+                El único sistema de mensajería donde el servidor NO puede leer tus mensajes.
+                Ni aunque un juez lo ordene. Ni aunque lo hackeen. Técnicamente imposible.
+            </p>
+            <div class="hero-actions">
+                <a href="/app" class="btn-cyber-lg">COMENZAR AHORA</a>
+                <a href="#about" class="btn-outline">CÓMO FUNCIONA</a>
+            </div>
+        </div>
+        <div class="hero-visual">
+            🔐
+        </div>
+    </section>
+    
+    <section class="trust-badges">
+        <div class="badge">
+            <span class="badge-icon">🔒</span>
+            <strong>Zero-Knowledge</strong>
+            <p>El servidor nunca ve tus datos ni tus llaves privadas</p>
+        </div>
+        <div class="badge">
+            <span class="badge-icon">⚛️</span>
+            <strong>Post-Cuántico</strong>
+            <p>Resistente a computadoras cuánticas (ML-KEM / SPHINCS+)</p>
+        </div>
+        <div class="badge">
+            <span class="badge-icon">⚖️</span>
+            <strong>Legalmente Blindado</strong>
+            <p>Técnicamente imposible entregar datos de usuario en texto plano</p>
+        </div>
+        <div class="badge">
+            <span class="badge-icon">🌐</span>
+            <strong>Open Source</strong>
+            <p>Código 100% auditable e inspeccionable por cualquiera</p>
+        </div>
+    </section>
+    
+    <section id="about" class="section">
+        <h2 class="section-title">¿Qué es Hermetic?</h2>
+        <div class="about-grid">
+            <div class="about-card">
+                <h3>🜁 El Problema</h3>
+                <p>WhatsApp, Telegram y Signal dicen ser seguros. Pero todos tienen un punto débil: <strong>el servidor puede acceder a tus metadatos y gráficos de contacto.</strong></p>
+                <p class="text-dim">Si hackean el servidor, si un gobierno lo confisca, o si un empleado malicioso accede... toda tu red queda expuesta.</p>
+            </div>
+            <div class="about-card">
+                <h3>🔐 Nuestra Solución</h3>
+                <p>Hermetic usa <strong>cifrado Zero-Knowledge real</strong>: el servidor retransmite bytes cifrados y no mantiene bases de datos persistentes con tus chats.</p>
+                <p class="text-dim">Ni el administrador del servidor puede leer tus mensajes. Las claves existen solo localmente en tu dispositivo.</p>
+            </div>
+            <div class="about-card">
+                <h3>⚖️ Blindaje Legal</h3>
+                <p>Si una autoridad exige tus datos, la respuesta formal es: <strong>"Técnicamente imposible de entregar."</strong></p>
+                <p class="text-dim">No almacenamos IPs de largo plazo, no registramos contactos ni guardamos historiales sin cifrar.</p>
+            </div>
+        </div>
+    </section>
+    
+    <section id="security" class="section dark">
+        <h2 class="section-title">Seguridad Comprobable</h2>
+        <div class="security-grid">
+            <div class="security-item">
+                <h4>🔐 Cifrado Post-Cuántico</h4>
+                <p>ML-KEM-1024 (Kyber) + AES-256-GCM</p>
+                <p class="text-dim">Resistente a ataques de computadoras cuánticas (algoritmo de Shor)</p>
+            </div>
+            <div class="security-item">
+                <h4>✍️ Firmas SPHINCS+</h4>
+                <p>Autenticidad post-cuántica verificable</p>
+                <p class="text-dim">Cada mensaje está firmado digitalmente. Imposible de falsificar.</p>
+            </div>
+            <div class="security-item">
+                <h4>🗑️ Zero-Persistencia</h4>
+                <p>Mensajes transitorios en RAM</p>
+                <p class="text-dim">Si confiscan el servidor físico, no encuentran historial legible.</p>
+            </div>
+            <div class="security-item">
+                <h4>🚫 Suite Anti-Capturas</h4>
+                <p>Detector de pantallazos & Protección visual</p>
+                <p class="text-dim">Imágenes efímeras denegadas al capturar pantalla.</p>
+            </div>
+        </div>
+    </section>
+    
+    <section id="technology" class="section">
+        <h2 class="section-title">Tecnología de Punta</h2>
+        <div class="tech-stack">
+            <div class="tech-item">
+                <strong>ML-KEM-1024</strong>
+                <span>Key Encapsulation post-cuántico (NIST FIPS 203)</span>
+            </div>
+            <div class="tech-item">
+                <strong>SPHINCS+</strong>
+                <span>Firmas digitales post-cuánticas (NIST FIPS 205)</span>
+            </div>
+            <div class="tech-item">
+                <strong>AES-256-GCM</strong>
+                <span>Cifrado simétrico autenticado (AEAD)</span>
+            </div>
+            <div class="tech-item">
+                <strong>MutationObserver</strong>
+                <span>Monitoreo activo del DOM contra inyección maliciosa (XSS)</span>
+            </div>
+            <div class="tech-item">
+                <strong>IndexedDB / LocalStorage</strong>
+                <span>Almacenamiento cifrado de archivos en cliente</span>
+            </div>
+            <div class="tech-item">
+                <strong>Web Crypto API</strong>
+                <span>Criptografía nativa del navegador, sin dependencias externas inseguras</span>
+            </div>
+        </div>
+    </section>
+    
+    <section id="faq" class="section dark">
+        <h2 class="section-title">Preguntas Frecuentes</h2>
+        <div class="faq-list">
+            <details class="faq-item">
+                <summary>¿En qué se diferencia Hermetic de WhatsApp/Signal?</summary>
+                <p>WhatsApp y Signal usan cifrado E2E, pero <strong>el servidor puede acceder a los metadatos</strong>. Hermetic es <strong>Zero-Knowledge</strong>: el servidor retransmite y purga. Además, usamos criptografía post-cuántica y blindaje anti-capturas en tiempo real.</p>
+            </details>
+            <details class="faq-item">
+                <summary>¿Qué pasa si confiscan el servidor?</summary>
+                <p><strong>Nada legible.</strong> Los mensajes nunca se almacenan en texto plano en disco. Solo existen en RAM efímera o cifrados en el dispositivo del cliente. No hay registros para entregar.</p>
+            </details>
+            <details class="faq-item">
+                <summary>¿Qué pasa si pierdo mi contraseña?</summary>
+                <p><strong>No hay forma de recuperarla desde el servidor.</strong> Por diseño, NADIE puede acceder a tus datos sin tus credenciales. Crea un backup cifrado local desde tu panel y guárdalo en un lugar seguro.</p>
+            </details>
+        </div>
+    </section>
+    
+    <section class="cta-section">
+        <h2>¿Listo para la privacidad absoluta?</h2>
+        <p>Sin registros. Sin metadatos. Sin compromisos.</p>
+        <br>
+        <a href="/app" class="btn-cyber-xl">ABRIR Hermetic</a>
+    </section>
+    
+    <footer>
+        <p>Hermetic v7.1 — Zero-Knowledge Messaging</p>
+        <p class="text-dim">Código abierto. Auditable. Confiable.</p>
+    </footer>
+
+    <script>
+        // SCRIPT RAIN MATRIX REALISTA CINEMATOGRÁFICO
+        const canvas = document.getElementById('matrix-canvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZアイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン◊⚡🛡️§¶∇∆';
+        const fontSize = 14;
+        let columns = Math.floor(canvas.width / fontSize);
+        let drops = [];
+        for (let i = 0; i < columns; i++) {
+            drops[i] = Math.random() * -100;
+        }
+
+        function drawMatrix() {
+            ctx.fillStyle = 'rgba(5, 5, 8, 0.08)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.font = fontSize + 'px "Courier New", monospace';
+            for (let i = 0; i < drops.length; i++) {
+                const char = chars[Math.floor(Math.random() * chars.length)];
+                
+                // Gota cabecera en blanco reluciente
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowBlur = 8;
+                ctx.shadowColor = '#00ff66';
+                ctx.fillText(char, i * fontSize, drops[i] * fontSize);
+
+                // Cuerpo verde neón brillante
+                ctx.fillStyle = '#00ff66';
+                ctx.shadowBlur = 0;
+                ctx.fillText(char, i * fontSize, (drops[i] - 1) * fontSize);
+
+                // Cola verde esmeralda
+                ctx.fillStyle = '#008f39';
+                ctx.fillText(char, i * fontSize, (drops[i] - 2) * fontSize);
+
+                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                    drops[i] = 0;
+                }
+                drops[i] += 0.9 + Math.random() * 0.25;
+            }
+            requestAnimationFrame(drawMatrix);
+        }
+        drawMatrix();
+    </script>
+</body>
+</html>

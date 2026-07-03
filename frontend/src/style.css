@@ -1,0 +1,348 @@
+@import "tailwindcss";
+
+
+/* Anonymous WhatsApp Style + Retro Arcade Details */
+
+@keyframes crt-flicker {
+  0% { opacity: 0.985; }
+  50% { opacity: 0.995; }
+  100% { opacity: 0.985; }
+}
+
+@keyframes scanline-anim {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+.crt-effect {
+  animation: crt-flicker 0.15s infinite;
+  position: relative;
+}
+
+.crt-effect::after {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.18) 50%), linear-gradient(90deg, rgba(0, 255, 183, 0.02), rgba(0, 0, 0, 0.05), rgba(0, 255, 183, 0.02));
+  z-index: 99999;
+  background-size: 100% 4px, 6px 100%;
+  pointer-events: none;
+}
+
+.scanline {
+  position: fixed;
+  top: 0; left: 0; right: 0; height: 8px;
+  background: rgba(0, 255, 183, 0.02);
+  z-index: 100000;
+  pointer-events: none;
+  animation: scanline-anim 10s linear infinite;
+}
+
+body {
+  background-color: #050308;
+  color: #e5e7eb;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  overflow: hidden;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #050308;
+}
+::-webkit-scrollbar-thumb {
+  background: #1c1729;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #00ffb7;
+}
+
+/* Message Bubble tails and shapes like WhatsApp */
+.bubble-sent {
+  background-color: rgba(5, 50, 35, 0.7);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 8px 8px 0px 8px;
+}
+
+.bubble-received {
+  background-color: #1b1727;
+  border: 1px solid #2e283d;
+  border-radius: 8px 8px 8px 0px;
+}
+
+/* Drawer transitions */
+.drawer-transition {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glow-green {
+  text-shadow: 0 0 5px #00ffb7;
+}
+.glow-pink {
+  text-shadow: 0 0 5px #ff00a0;
+}
+
+/* ============================================ */
+/* DIFERENCIACIÓN VISUAL LOGIN vs REGISTRO      */
+/* ============================================ */
+
+/* Neon CSS Variable definitions */
+:root {
+  --neon-cyan: #00ffff;
+  --neon-magenta: #ff00ff;
+  --neon-red: #ff0055;
+  --neon-yellow: #ffcc00;
+  --neon-green: #00ff66;
+  --glow-cyan: rgba(0, 255, 255, 0.4);
+  --glow-magenta: rgba(255, 0, 255, 0.4);
+}
+
+/* LOGIN: Tema CYAN */
+.auth-view:not(.hidden) h2.neon-text-cyan {
+    color: var(--neon-cyan);
+    text-shadow: 0 0 10px var(--glow-cyan), 0 0 20px var(--glow-cyan);
+    animation: text-flicker 5s infinite;
+}
+
+/* REGISTRO: Tema MAGENTA */
+.auth-view:not(.hidden) h2.neon-text-magenta {
+    color: var(--neon-magenta);
+    text-shadow: 0 0 10px var(--glow-magenta), 0 0 20px var(--glow-magenta);
+    animation: pulse-glow 2s infinite;
+}
+
+/* Inputs diferenciados por color de borde */
+.input-cyber {
+    border-left: 3px solid var(--neon-cyan);
+    transition: all 0.3s;
+}
+
+.input-magenta {
+    border-left: 3px solid var(--neon-magenta) !important;
+}
+
+.input-magenta:focus {
+    border-color: var(--neon-magenta) !important;
+    box-shadow: 0 0 15px var(--glow-magenta) !important;
+}
+
+/* Botones diferenciados */
+.btn-cyber {
+    border-color: var(--neon-cyan);
+    color: var(--neon-cyan);
+}
+
+.btn-magenta {
+    border-color: var(--neon-magenta) !important;
+    color: var(--neon-magenta) !important;
+}
+
+.btn-magenta:hover {
+    background: var(--glow-magenta) !important;
+    box-shadow: 0 0 20px var(--glow-magenta) !important;
+}
+
+/* (Animación heredada eliminada: ya no rotamos los <circle> del auth-icon porque interfería con el Ojo de Hermes) */
+
+.register-icon svg rect {
+    animation: build-key 2s ease-out;
+}
+
+/* Medidor de fortaleza de contraseña */
+.password-strength-meter {
+    margin-top: 8px;
+    background: #1a1a2e;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.strength-bar {
+    height: 4px;
+    width: 0%;
+    transition: width 0.3s, background 0.3s;
+    border-radius: 4px;
+}
+
+.strength-weak { width: 25%; background: var(--neon-red); }
+.strength-medium { width: 50%; background: var(--neon-yellow); }
+.strength-strong { width: 75%; background: var(--neon-green); }
+.strength-very-strong { width: 100%; background: var(--neon-cyan); }
+
+/* Indicador de coincidencia */
+.match-indicator {
+    font-size: 0.85em;
+    margin-top: 4px;
+}
+
+.match-ok { color: var(--neon-green); }
+.match-fail { color: var(--neon-red); }
+
+/* Checkbox cyberpunk */
+.cyber-checkbox {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--neon-magenta);
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    margin-right: 8px;
+}
+
+.cyber-checkbox:checked::after {
+    content: '✓';
+    position: absolute;
+    top: -4px;
+    left: 2px;
+    color: var(--neon-magenta);
+    font-weight: bold;
+    font-size: 10px;
+}
+
+/* Animaciones */
+@keyframes text-flicker {
+    0%, 100% { opacity: 1; }
+    92% { opacity: 1; }
+    93% { opacity: 0.8; }
+    94% { opacity: 1; }
+    96% { opacity: 0.9; }
+    97% { opacity: 1; }
+}
+
+@keyframes pulse-glow {
+    0%, 100% { text-shadow: 0 0 10px var(--glow-magenta); }
+    50% { text-shadow: 0 0 25px var(--glow-magenta), 0 0 50px var(--glow-magenta); }
+}
+
+@keyframes rotate-slow {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes build-key {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Tour overlay */
+.tour-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(2px);
+    z-index: 10000;
+    animation: fadeIn 0.3s;
+}
+
+/* Tooltip del tour */
+.tour-tooltip {
+    position: fixed;
+    z-index: 10001;
+    background: #0d1117;
+    border: 1px solid #22d3ee;
+    border-radius: 8px;
+    padding: 20px;
+    max-width: 420px;
+    min-width: 320px;
+    box-shadow: 0 0 30px rgba(34, 211, 238, 0.25);
+    animation: slideIn 0.3s ease-out;
+}
+
+/* Highlight del elemento objetivo */
+.tour-highlight {
+    position: relative;
+    z-index: 10001 !important;
+    box-shadow: 0 0 0 3px #22d3ee, 0 0 25px rgba(34, 211, 238, 0.6) !important;
+    border-radius: 6px;
+    animation: pulse-highlight 2s infinite;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(15px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-highlight {
+    0%, 100% { box-shadow: 0 0 0 3px #22d3ee, 0 0 25px rgba(34, 211, 238, 0.6); }
+    50% { box-shadow: 0 0 0 5px #22d3ee, 0 0 40px rgba(34, 211, 238, 0.9); }
+}
+
+/* ============================================ */
+/* DISEÑO RESPONSIVE COMPLETO v8.0              */
+/* ============================================ */
+
+/* Móvil pequeño (< 480px) */
+@media (max-width: 480px) {
+    .sidebar { width: 100%; }
+    .chat-area { width: 100%; }
+    .message-bubble { max-width: 85%; }
+    .btn-cyber { padding: 8px 16px; font-size: 0.9em; }
+}
+
+/* Móvil grande (480px - 768px) */
+@media (min-width: 481px) and (max-width: 768px) {
+    .sidebar { width: 35%; }
+    .chat-area { width: 65%; }
+}
+
+/* Tablet (768px - 1024px) */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .sidebar { width: 30%; }
+    .chat-area { width: 70%; }
+}
+
+/* Desktop (> 1024px) */
+@media (min-width: 1025px) {
+    .sidebar { width: 25%; max-width: 350px; }
+    .chat-area { width: 75%; }
+}
+
+/* Indicadores visuales MEJORADOS */
+.status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 6px;
+}
+
+.status-online { background: #00ff66; box-shadow: 0 0 8px #00ff66; }
+.status-offline { background: #555; }
+.status-away { background: #ffff00; box-shadow: 0 0 8px #ffff00; }
+
+/* Barra de progreso de carga */
+.upload-progress {
+    height: 3px;
+    background: linear-gradient(90deg, #00ffff, #ff007f);
+    transition: width 0.3s;
+    border-radius: 2px;
+}
+
+/* Indicador de cifrado */
+.encryption-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.7em;
+    color: #00ff66;
+    padding: 2px 6px;
+    border: 1px solid #00ff66;
+    border-radius: 4px;
+}
+
+.encryption-indicator::before {
+    content: '🔒';
+}

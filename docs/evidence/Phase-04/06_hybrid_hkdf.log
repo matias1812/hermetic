@@ -1,0 +1,21 @@
+Evidence
+
+Handshake
+
+Classical Secret:
+X25519
+32 bytes
+
+PQC Secret:
+ML-KEM-768
+32 bytes
+
+Hybrid HKDF:
+
+Input:
+secret_x25519 || secret_mlkem
+
+Output:
+Root Key
+
+PASS

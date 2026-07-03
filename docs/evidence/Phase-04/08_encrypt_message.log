@@ -1,0 +1,10 @@
+Evidence
+
+Action: encrypt_message
+Algorithm: XChaCha20Poly1305
+
+Plaintext: Hello from Post-Quantum world!
+Ciphertext Length: 590 bytes
+Ciphertext (hex): 7b22686561646572223a5b3135302c3136322c3136332c3130372c37322c3937...
+
+PASS

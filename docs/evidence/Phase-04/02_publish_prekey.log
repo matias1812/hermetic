@@ -1,0 +1,49 @@
+Evidence
+
+Action: generate_prekey_bundle
+Implementation: Rust/WASM
+
+Classical PublicKey (X25519): 32 bytes
+PQC PublicKey (ML-KEM-768): 1184 bytes
+Signature (Ed25519): 64 bytes
+
+Bundle Payload:
+{
+  "identity_key": [
+    35,
+    204,
+    176,
+    126,
+    247,
+    79,
+    130,
+    15,
+    19,
+    97,
+    178,
+    112,
+    217,
+    90,
+    237,
+    255,
+    36,
+    178,
+    240,
+    48,
+    208,
+    150,
+    49,
+    82,
+    237,
+    144,
+    140,
+    249,
+    224,
+    74,
+    118,
+    96
+  ]...
+
+Result:
+PreKey Bundle published
+PASS

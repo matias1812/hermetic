@@ -1,0 +1,1 @@
+JS_BINARY_STUB

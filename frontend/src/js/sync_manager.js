@@ -1,0 +1,841 @@
+import { hermesBridge } from './crypto_wasm_bridge.js';
+
+import { CryptoClient } from './crypto_client.js';
+import { state } from './state.js';
+import { PayloadValidator } from './security/payload_validator.js';
+
+export class SyncManager {
+    constructor(currentUserAlias, storage, contacts, groups, chats, onMessageReceived) {
+        this.currentUserAlias = currentUserAlias;
+        this.storage = storage;
+        this.contacts = contacts;
+        this.groups = groups;
+        this.chats = chats;
+        this.onMessageReceived = onMessageReceived; // Callback to refresh UI
+        this.activeChatId = null; // Currently selected active chat ID in UI
+        this.websocket = null;
+        this.syncInterval = null;
+        this.sphincsKeysCache = {}; // Cache for SPHINCS+ public keys
+    }
+
+    async getOrRecoverUserKeys() {
+        let keys = null;
+        try {
+            keys = await this.storage.load('hermes_keys') 
+                   || await this.storage.load('hermes_pqc_keys') 
+                   || state.userKeys;
+        } catch (e) {
+            if (e.name === 'StorageDecryptionError') {
+                throw e;
+            }
+            console.warn("[SyncManager] Aviso al descifrar hermes_keys (se regenerarán):", e.message);
+        }
+        if (!keys || !keys.sphincs_sk || !keys.kyber_sk) {
+            console.warn("[SyncManager] Local PQC keys missing or incomplete. Regenerating and re-registering PQC keys...");
+            try {
+                console.log("[SyncManager] Generando llaves en fallback (WASM)...");
+                const generated = hermesBridge.generateIdentityKeys();
+                keys = {
+                    kyber_pk: generated.kyber_pk_hex,
+                    kyber_sk: generated.kyber_sk_hex,
+                    sphincs_pk: generated.sphincs_pk_hex,
+                    sphincs_sk: generated.sphincs_sk_hex
+                };
+                state.userKeys = keys;
+                await this.savePQCKeys(keys);
+                
+                const idHash = this.storage.getUserId();
+                await fetch('/api/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_id: idHash,
+                        kyber_pk_hex: keys.kyber_pk,
+                        sphincs_pk_hex: keys.sphincs_pk
+                    })
+                });
+            } catch (e) {
+                console.error("[SyncManager] Failed to recover PQC keys:", e);
+            }
+        }
+        return keys;
+    }
+
+    async savePQCKeys(keys) {
+        await this.storage.save('hermes_pqc_keys', {
+            kyber_pk: keys.kyber_pk,
+            kyber_sk: keys.kyber_sk,
+            sphincs_pk: keys.sphincs_pk,
+            sphincs_sk: keys.sphincs_sk,
+            savedAt: Date.now()
+        });
+        // También guardamos en el key original por retrocompatibilidad con auth_ui
+        await this.storage.save('hermes_keys', keys);
+    }
+
+    async start(websocketUrl) {
+        // Re-register public keys on the server before starting WS.
+        // The server is stateless about keys (DROP+CREATE on restart in some configs),
+        // so we must ensure the user is in the DB before WS auth is attempted.
+        await this._ensureRegistered();
+
+        window.addEventListener('online', () => {
+            console.info('[SyncManager] Red recuperada (online). Vaciando cola offline...');
+            this.flushOutbox();
+        });
+
+        // Start periodic REST polling fallback in case WS is disconnected
+        this.syncInterval = setInterval(() => {
+            this.fetchPendingBlobs();
+            this.flushOutbox();
+        }, 15000);
+        await this.fetchPendingBlobs();
+        this.flushOutbox();
+        this.connectWebSocket(websocketUrl);
+    }
+
+    async _ensureRegistered() {
+        /**
+         * Re-registers the user's public keys on the server.
+         * This is idempotent — calling it multiple times is safe.
+         * It guarantees the server knows the user's public key before WS auth.
+         */
+        try {
+            const idHash = this.storage.getUserId();
+            const userKeys = await this.getOrRecoverUserKeys();
+            if (!userKeys) return;
+
+            await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    client_id: idHash,
+                    password: '',
+                    kyber_pk_hex: userKeys.kyber_pk,
+                    sphincs_pk_hex: userKeys.sphincs_pk
+                })
+            });
+        } catch (e) {
+            console.warn('[SyncManager] Could not re-register keys:', e);
+        }
+    }
+
+    stop() {
+        if (this.syncInterval) clearInterval(this.syncInterval);
+        if (this.websocket) this.websocket.close();
+    }
+
+    async fetchPendingBlobs() {
+        const idHash = this.storage.getUserId();
+        const userKeys = await this.getOrRecoverUserKeys();
+        if (!userKeys) return;
+
+        try {
+            const timestamp = intTimestamp();
+            const challenge = String(timestamp);
+            const signature = await CryptoClient.signChallenge(challenge, userKeys.sphincs_sk);
+
+            const res = await fetch("/api/fetch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id_hash: idHash,
+                    timestamp: timestamp,
+                    signature: signature
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.blobs.length > 0) {
+                    logger(`Received ${data.blobs.length} pending blobs via REST.`);
+                }
+                for (const blob of data.blobs) {
+                    await this.processIncomingBlob(blob, userKeys);
+                }
+                if (data.blobs.length > 0 && this.onMessageReceived) {
+                    this.onMessageReceived();
+                }
+            } else if (res.status === 401) {
+                console.warn("[SyncManager] Re-registrando llaves públicas en relevo tras respuesta 401...");
+                if (userKeys.kyber_pk && userKeys.sphincs_pk) {
+                    await fetch('/api/register', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            client_id: idHash,
+                            kyber_pk_hex: userKeys.kyber_pk,
+                            sphincs_pk_hex: userKeys.sphincs_pk
+                        })
+                    }).catch(() => {});
+                }
+            } else {
+
+                logger(`Fetch blobs failed with status: ${res.status}`);
+            }
+        } catch (e) {
+
+            console.warn("[SyncManager] Fallback poll failed:", e);
+        }
+    }
+
+    async flushOutbox() {
+        if (!window.state || !window.state.store || !window.state.store.state.outbox) return;
+        const outbox = window.state.store.state.outbox;
+        if (outbox.length === 0) return;
+        
+        logger(`[SyncManager] Flushing ${outbox.length} pending messages from outbox...`);
+        for (const msg of [...outbox]) {
+            try {
+                const res = await fetch("/api/relay", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        sender_hash: msg.sender_hash,
+                        receiver_hash: msg.receiver_hash,
+                        encrypted_blob_hex: msg.encrypted_blob_hex,
+                        session_key_hash: msg.session_key_hash,
+                        ttl_seconds: window.privacySettings ? window.privacySettings.settings.pendingMessageTTL : 86400
+                    })
+                });
+
+                if (res.ok) {
+                    // Si se envió, eliminar del outbox
+                    await window.state.store.dispatch('OUTBOX_REMOVED', msg);
+                    if (this.chats && typeof this.chats.updateMessageStatusById === 'function') {
+                        await this.chats.updateMessageStatusById(this.storage, msg.id, 'sent');
+                    }
+                    if (this.onMessageSent) this.onMessageSent(msg.id);
+                    if (this.onMessageReceived) this.onMessageReceived();
+                }
+            } catch (e) {
+                console.warn(`[SyncManager] Flush failed for message ${msg.id}, keeping in outbox.`);
+            }
+        }
+    }
+
+    connectWebSocket(url) {
+        const idHash = this.storage.getUserId();
+        this.websocket = new WebSocket(`${url}/ws/${idHash}`);
+
+        this.websocket.onopen = async () => {
+            const userKeys = await this.getOrRecoverUserKeys();
+            if (!userKeys) return;
+            try {
+                // Handshake auth within 5 seconds
+                const timestamp = intTimestamp();
+                const sig = await CryptoClient.signChallenge(String(timestamp), userKeys.sphincs_sk);
+                this.websocket.send(JSON.stringify({
+                    type: "auth",
+                    timestamp: timestamp,
+                    signature: sig,
+                    show_online: window.state?.privacySettings?.onlineStatus !== false
+                }));
+            } catch (e) {
+                console.error("WS auth failed:", e);
+            }
+        };
+
+        this.websocket.onmessage = async (event) => {
+            let rawData;
+            try { rawData = JSON.parse(event.data); } catch(e) { return; }
+            const data = PayloadValidator.sanitizePayload(rawData);
+            if (!data || typeof data !== 'object') return;
+
+            if (data.type === "auth_ok") {
+                logger("WebSocket authenticated successfully.");
+                this.flushOutbox(); // Vaciar cola offline al reconectar
+                return;
+            }
+
+            if (data.type === "relayed_blob") {
+                const userKeys = await this.getOrRecoverUserKeys();
+                if (userKeys) {
+                    await this.processIncomingBlob(data, userKeys);
+                    if (this.onMessageReceived) {
+                        this.onMessageReceived();
+                    }
+                }
+            }
+        };
+
+        this.websocket.onclose = () => {
+            // Reconnect after 5 seconds
+            setTimeout(() => this.connectWebSocket(url), 5000);
+        };
+    }
+
+    async sendOOBVerification(receiverId) {
+        if (!this.storage || !this.currentUserAlias) return;
+        try {
+            await this.sendBlob(this.currentUserAlias, receiverId, {
+                type: "oob_verify"
+            });
+        } catch (e) {
+            console.error("[SyncManager] Error sending OOB verification:", e);
+        }
+    }
+
+    async processIncomingBlob(blob, userKeys) {
+        // blob structure: { sender_hash, encrypted_blob_hex, timestamp }
+        // The encrypted_blob_hex contains the E2EE package { ciphertext_kem, wrapped_otp_key, stego_container, signature, aes_nonce }
+        // Wait, how do we know what key to use for decryption?
+        // 1. Is it a group message or DM?
+        // Let's try to decrypt it.
+        // We can parse the envelope from encrypted_blob_hex:
+        try {
+            let rawEnvelope;
+            try { rawEnvelope = JSON.parse(hexToString(blob.encrypted_blob_hex)); } catch(e) { return; }
+            const envelope = PayloadValidator.sanitizePayload(rawEnvelope);
+            if (!PayloadValidator.validateEnvelope(envelope)) return;
+            
+            // Check if sender is blocked
+            const senderId = envelope.sender_id;
+            if (this.contacts.blockedContacts.includes(senderId)) {
+                return; // Suppressed
+            }
+
+            // Resolve the sender's SPHINCS+ public key from registry
+            const senderSphincsPk = await this._getSenderSphincsPk(senderId);
+            if (senderSphincsPk === "none") {
+                console.warn(`[SyncManager] Could not resolve SPHINCS+ PK for sender ${senderId}. Skipping decryption.`);
+                return;
+            }
+
+            // Find key: if it is targeted to a group, look up group key
+            const isGroup = this.groups.userGroups.some(g => g.id === envelope.receiver_id);
+            const groupObj = isGroup ? this.groups.userGroups.find(g => g.id === envelope.receiver_id) : null;
+            
+            let decryptedPlaintext = null;
+            
+            if (isGroup && groupObj) {
+                decryptedPlaintext = await CryptoClient.decryptPayload(
+                    envelope,
+                    "none",
+                    senderSphincsPk,
+                    groupObj.symmetric_key
+                );
+            } else {
+                // DM: retrieve sender sphincs pk and shared key
+                const sharedKey = this.contacts.sharedKeys[senderId];
+                decryptedPlaintext = await CryptoClient.decryptPayload(
+                    envelope,
+                    userKeys.kyber_sk,
+                    senderSphincsPk,
+                    sharedKey || "0000000000000000000000000000000000000000000000000000000000000000"
+                );
+            }
+
+            if (!decryptedPlaintext) return;
+
+            // Parse inner payload
+            let rawPayload;
+            try { rawPayload = JSON.parse(decryptedPlaintext); } catch(e) { return; }
+            const payload = PayloadValidator.sanitizePayload(rawPayload);
+            if (!payload || typeof payload !== 'object') return;
+            
+            if (payload.type === "chat" || payload.type === "ephemeral_image" || payload.type === "ephemeral_audio" || payload.type === "ephemeral_text") {
+                if (!this.contacts.contacts.includes(senderId) && senderId !== this.currentUserAlias) {
+                    this.contacts.contacts.push(senderId);
+                    this.contacts.contactData = this.contacts.contactData.filter(c => c.contact_id !== senderId);
+                    this.contacts.contactData.push({
+                        contact_id: senderId,
+                        status: 'accepted',
+                        shared_key: null
+                    });
+                    await this.contacts.save(this.storage);
+                }
+                // Detectar si es un mensaje de audio empaquetado como chat
+                const isAudio = payload.msgType === 'audio' || payload.type === 'ephemeral_audio';
+                const localType = payload.type === 'ephemeral_image' 
+                    ? 'ephemeral_image' 
+                    : payload.type === 'ephemeral_audio' ? 'ephemeral_audio'
+                    : payload.type === 'ephemeral_text' ? 'ephemeral_text'
+                    : isAudio ? 'audio' : payload.type;
+
+                await this.chats.addMessage(this.storage, senderId, {
+                    id:            envelope.signature,
+                    sender:        senderId,
+                    receiver:      envelope.receiver_id,
+                    plaintext:     payload.text,
+                    verified:      true,
+                    timestamp:     formatTime(blob.timestamp),
+                    type:          localType,
+                    audioMime:     payload.audioMime     || null,
+                    audioDuration: payload.audioDuration || 0,
+                    viewed_by:     [],
+                    unread:        (this.activeChatId !== senderId && senderId !== this.currentUserAlias),
+                    raw:           envelope
+                });
+
+                if ((this.activeChatId !== senderId || document.hidden) && "Notification" in window && Notification.permission === "granted") {
+                    try {
+                        const title = `Mensaje de @${senderId}`;
+                        const body = localType === 'ephemeral_image' ? '📷 Foto efímera' :
+                                     localType === 'ephemeral_audio' ? '🎵 Audio efímero' :
+                                     localType === 'ephemeral_text' ? '🤫 Mensaje efímero' :
+                                     localType === 'audio' ? '🎵 Mensaje de voz' :
+                                     (payload.text.substring(0, 40) + (payload.text.length > 40 ? '...' : ''));
+                        new Notification(title, { body });
+                    } catch (e) {}
+                }
+
+                // Dispatch event for in-app notifications
+                if (senderId !== this.currentUserAlias) {
+                    document.dispatchEvent(new CustomEvent('hermes:new_message', { detail: { sender: senderId } }));
+                }
+
+
+                // Send delivery and read receipts for DMs
+                if (senderId !== this.currentUserAlias) {
+                    try {
+                        await this.sendBlob(this.currentUserAlias, senderId, {
+                            type: "receipt",
+                            subtype: "delivered",
+                            msg_id: envelope.signature
+                        });
+                        
+                        if (this.activeChatId === senderId && window.state?.privacySettings?.readReceipts !== false && !window.disableReadReceipts) {
+                            await this.sendBlob(this.currentUserAlias, senderId, {
+                                type: "receipt",
+                                subtype: "read",
+                                msg_id: envelope.signature
+                            });
+                        }
+                    } catch (e) {
+                        console.error("[SyncManager] Error sending receipts:", e);
+                    }
+                }
+            } 
+            else if (payload.type === "receipt") {
+                const targetId = senderId;
+                const msgId = payload.msg_id;
+                const subtype = payload.subtype;
+                const targetHistory = this.chats.getMessages(targetId);
+                const msg = targetHistory.find(m => m.id === msgId);
+                if (msg) {
+                    if (subtype === "read") {
+                        msg.status = "read";
+                    } else if (subtype === "delivered" && msg.status !== "read") {
+                        msg.status = "delivered";
+                    }
+                    await this.chats.save(this.storage);
+                    if (this.onMessageReceived) this.onMessageReceived();
+                }
+            }
+            else if (payload.type === "msg_delete") {
+                const targetId = isGroup ? envelope.receiver_id : senderId;
+                await this.chats.deleteMessage(this.storage, targetId, payload.msg_id);
+            }
+            else if (payload.type === "msg_edit") {
+                const targetId = isGroup ? envelope.receiver_id : senderId;
+                await this.chats.editMessage(this.storage, targetId, payload.msg_id, payload.new_text);
+            }
+            else if (payload.type === "ephemeral_viewed") {
+                const targetId = payload.group_id || (isGroup ? envelope.receiver_id : senderId);
+                const msgId = payload.msg_id;
+                const viewerId = senderId;
+                
+                const targetHistory = this.chats.getMessages(targetId);
+                const msg = targetHistory.find(m => m.id === msgId);
+                if (msg) {
+                    if (!msg.viewed_by) msg.viewed_by = [];
+                    if (!msg.viewed_by.includes(viewerId)) {
+                        msg.viewed_by.push(viewerId);
+                    }
+                    
+                    let shouldDelete = false;
+                    if (isGroup) {
+                        const group = this.groups.userGroups.find(g => g.id === targetId);
+                        if (group) {
+                            const otherMembers = group.members.filter(m => m !== msg.sender);
+                            const allViewed = otherMembers.every(m => msg.viewed_by.includes(m));
+                            if (allViewed) shouldDelete = true;
+                        }
+                    } else {
+                        shouldDelete = true;
+                    }
+                    
+                    if (shouldDelete) {
+                        await this.chats.deleteMessage(this.storage, targetId, msgId);
+                    } else {
+                        await this.chats.save(this.storage);
+                    }
+                }
+            }
+            else if (payload.type === "typing") {
+                const targetId = payload.is_group ? payload.group_id : senderId;
+                document.dispatchEvent(new CustomEvent("typing_indicator", {
+                    detail: {
+                        chatId: String(targetId),
+                        username: senderId,
+                        isGroup: !!payload.is_group
+                    }
+                }));
+            }
+            else if (payload.type === "contact_request") {
+                await this.contacts.addReceivedRequest(this.storage, senderId);
+                document.dispatchEvent(new Event("contacts_updated"));
+                if (window._hermesShowToast) window._hermesShowToast(`⚡ Solicitud de contacto de @${senderId}`, false);
+            } 
+            else if (payload.type === "contact_accept") {
+                await this.contacts.acceptRequest(this.storage, senderId, payload.shared_key);
+                document.dispatchEvent(new Event("contacts_updated"));
+                if (window._hermesShowToast) window._hermesShowToast(`🎉 ¡@${senderId} aceptó tu solicitud de contacto!`, false);
+            } 
+            else if (payload.type === "contact_reject") {
+                await this.contacts.rejectRequest(this.storage, senderId);
+                document.dispatchEvent(new Event("contacts_updated"));
+                if (window._hermesShowToast) window._hermesShowToast(`ℹ️ @${senderId} declinó la solicitud`, false);
+            }
+            else if (payload.type === "oob_verify") {
+                await this.contacts.setPeerVerifiedMe(this.storage, senderId, true);
+                document.dispatchEvent(new Event("contacts_updated"));
+                if (window._hermesShowToast) window._hermesShowToast(`🛡️ @${senderId} verificó tu huella de identidad OOB`, false);
+                await this.chats.addMessage(this.storage, senderId, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: envelope.receiver_id,
+                    plaintext: `🛡️ @${senderId} verificó tu huella de identidad OOB`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+                if (window.renderContactSidebar) window.renderContactSidebar();
+                if (window.state && window.state.activeContact === senderId && window.openChatWithContact) {
+                    window.openChatWithContact();
+                }
+            }
+
+            else if (payload.type === "screenshot_alert") {
+                await this.chats.addMessage(this.storage, senderId, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: envelope.receiver_id,
+                    plaintext: `⚠️ @${senderId} tomó una captura de pantalla de la imagen efímera!`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+            }
+            else if (payload.type === "group_invite") {
+                await this.groups.createGroup(
+                    this.storage,
+                    payload.group_id,
+                    payload.group_name,
+                    payload.creator_id,
+                    payload.members,
+                    payload.symmetric_key
+                );
+                await this.chats.addMessage(this.storage, payload.group_id, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: payload.group_id,
+                    plaintext: `🎉 Te han invitado al grupo #${payload.group_name} creado por @${payload.creator_id}.`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+            }
+            else if (payload.type === "group_screenshot_alert") {
+                await this.chats.addMessage(this.storage, payload.group_id, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: payload.group_id,
+                    plaintext: `⚠️ @${senderId} tomó una captura de pantalla de la imagen efímera en el grupo!`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+            }
+            else if (payload.type === "group_chat" || payload.type === "group_ephemeral_image" || payload.type === "group_ephemeral_audio" || payload.type === "group_ephemeral_text") {
+                const isAudio   = payload.msgType === 'audio' || payload.type === "group_ephemeral_audio";
+                const localType = payload.type === "group_ephemeral_image"
+                    ? "ephemeral_image"
+                    : payload.type === "group_ephemeral_audio" ? "ephemeral_audio"
+                    : payload.type === "group_ephemeral_text" ? "ephemeral_text"
+                    : isAudio ? "audio" : "chat";
+
+                await this.chats.addMessage(this.storage, payload.group_id, {
+                    id:            envelope.signature,
+                    sender:        senderId,
+                    receiver:      payload.group_id,
+                    plaintext:     payload.text,
+                    verified:      true,
+                    timestamp:     formatTime(blob.timestamp),
+                    type:          localType,
+                    audioMime:     payload.audioMime     || null,
+                    audioDuration: payload.audioDuration || 0,
+                    viewed_by:     [],
+                    unread:        (this.activeChatId !== payload.group_id && senderId !== this.currentUserAlias),
+                    raw:           envelope
+                });
+
+                if (senderId !== this.currentUserAlias && (this.activeChatId !== payload.group_id || document.hidden) && "Notification" in window && Notification.permission === "granted") {
+                    try {
+                        let groupName = payload.group_id;
+                        const grp = this.groups.userGroups.find(g => g.id === payload.group_id);
+                        if (grp) groupName = grp.name;
+                        
+                        const title = `Mensaje de @${senderId} en #${groupName}`;
+                        const body = localType === 'ephemeral_image' ? '📷 Foto efímera' :
+                                     localType === 'ephemeral_audio' ? '🎵 Audio efímero' :
+                                     localType === 'ephemeral_text' ? '🤫 Mensaje efímero' :
+                                     localType === 'audio' ? '🎵 Mensaje de voz' :
+                                     (payload.text.substring(0, 40) + (payload.text.length > 40 ? '...' : ''));
+                        new Notification(title, { body });
+                    } catch (e) {}
+                }
+            }
+            else if (payload.type === "group_rename") {
+                await this.groups.updateGroupName(this.storage, payload.group_id, payload.new_name);
+                await this.chats.addMessage(this.storage, payload.group_id, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: payload.group_id,
+                    plaintext: `✏️ @${senderId} renombró el grupo a #${payload.new_name}.`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+            }
+            else if (payload.type === "group_add_member") {
+                await this.groups.addMember(this.storage, payload.group_id, payload.user_id);
+                await this.chats.addMessage(this.storage, payload.group_id, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: payload.group_id,
+                    plaintext: `ℹ️ @${senderId} agregó a @${payload.user_id} al grupo.`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+            }
+            else if (payload.type === "group_rekey") {
+                await this.groups.rotateGroupKey(this.storage, payload.group_id, payload.new_symmetric_key);
+                await this.chats.addMessage(this.storage, payload.group_id, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: payload.group_id,
+                    plaintext: `🔑 @${senderId} ha rotado la clave criptográfica del grupo por seguridad (Forward Secrecy).`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+            }
+            else if (payload.type === "group_remove_member" || payload.type === "group_member_leave") {
+                const userToRemove = payload.type === "group_member_leave" ? senderId : payload.user_id;
+                await this.groups.removeMember(this.storage, payload.group_id, userToRemove);
+                if (userToRemove === this.currentUserAlias) {
+                    // We were removed from the group, delete locally
+                    this.groups.userGroups = this.groups.userGroups.filter(g => g.id !== payload.group_id);
+                    await this.groups.save(this.storage);
+                } else {
+                    const actionText = payload.type === "group_member_leave"
+                        ? `🚶 @${userToRemove} ha salido del grupo.`
+                        : `🚫 @${senderId} ha eliminado a @${userToRemove} del grupo.`;
+                    await this.chats.addMessage(this.storage, payload.group_id, {
+                        id: envelope.signature,
+                        sender: 'system',
+                        receiver: payload.group_id,
+                        plaintext: actionText,
+                        timestamp: formatTime(blob.timestamp),
+                        type: 'system',
+                        viewed_by: []
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("Error processing blob envelope:", e);
+        }
+    }
+
+    async sendBlob(senderId, receiverId, payloadObj, routeToId = null) {
+        // Resolve receiver hash and keys
+        const receiverHash = await sha256(routeToId || receiverId);
+        const senderHash = await sha256(senderId);
+        const userKeys = await this.getOrRecoverUserKeys();
+
+        // Check if group or DM
+        const isGroup = this.groups.userGroups.some(g => g.id === receiverId);
+        const groupObj = isGroup ? this.groups.userGroups.find(g => g.id === receiverId) : null;
+        
+        let receiverKyberPk = "none";
+        let sessionKeyHex = "none";
+
+        if (isGroup && groupObj) {
+            sessionKeyHex = groupObj.symmetric_key;
+        } else {
+            const keysRes = await fetch(`/api/user/${receiverHash}`);
+            if (!keysRes.ok) throw new Error("Receiver not registered");
+            const keys = await keysRes.json();
+            receiverKyberPk = keys.kyber_pk_hex;
+            if (payloadObj.type === "contact_accept") {
+                sessionKeyHex = "0000000000000000000000000000000000000000000000000000000000000000";
+            } else {
+                sessionKeyHex = this.contacts.sharedKeys[receiverId] || "0000000000000000000000000000000000000000000000000000000000000000";
+            }
+        }
+
+        // Encrypt the inner payload
+        const plaintext = JSON.stringify(payloadObj);
+        const envelope = await CryptoClient.encryptPayload(
+            plaintext,
+            receiverKyberPk,
+            userKeys.sphincs_sk,
+            sessionKeyHex,
+            senderId,
+            receiverId
+        );
+
+        // Convert envelope to hex blob
+        const envelopeHex = stringToHex(JSON.stringify(envelope));
+        // Per-message random nonce — prevents replay attacks without blocking subsequent messages.
+        // DO NOT use sha256(sessionKeyHex): the shared key is fixed, so its hash is always
+        // the same and the server would reject every message after the first as a replay.
+        const sessionKeyHash = crypto.randomUUID().replace(/-/g, '');
+
+        console.log(`[SyncManager] relaying blob from ${senderId} (${senderHash}) to ${receiverId} (${receiverHash})`);
+        
+        // Send to server blind relay
+        let resJson = null;
+        try {
+            const res = await fetch("/api/relay", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    sender_hash: senderHash,
+                    receiver_hash: receiverHash,
+                    encrypted_blob_hex: envelopeHex,
+                    session_key_hash: sessionKeyHash,
+                    ttl_seconds: window.privacySettings ? window.privacySettings.settings.pendingMessageTTL : 86400
+                })
+            });
+
+            if (!res.ok) {
+                const errJson = await res.json().catch(() => ({}));
+                throw new Error("Failed to relay blob: " + (errJson.detail || res.statusText));
+            }
+            resJson = await res.json();
+        } catch (e) {
+            console.warn(`[SyncManager] Red falló al enviar mensaje:`, e.message);
+            // Si falla la red y NO es un mensaje efímero, lo guardamos en el Outbox
+            if (payloadObj.type !== "typing" && payloadObj.type !== "receipt" && !payloadObj.type.startsWith("ephemeral_")) {
+                const outboxMsg = {
+                    id: envelope.signature,
+                    sender_hash: senderHash,
+                    receiver_hash: receiverHash,
+                    encrypted_blob_hex: envelopeHex,
+                    session_key_hash: sessionKeyHash,
+                    timestamp: Date.now()
+                };
+                await window.state.store.dispatch('OUTBOX_ADDED', outboxMsg);
+                console.info(`[SyncManager] Mensaje no efímero guardado en Outbox para reintento automático.`);
+            }
+            
+            // Retornamos un ID falso (la signature) para que la UI lo registre como "pending_send"
+            resJson = { blob_id: "pending_" + envelope.signature };
+        }
+
+        return {
+            blob_id: resJson.blob_id,
+            signature: envelope.signature,
+            envelope: envelope,
+            is_pending: resJson.blob_id.startsWith("pending_")
+        };
+    }
+
+    async sendGroupBlob(senderId, groupId, payloadObj) {
+        const groupObj = this.groups.userGroups.find(g => g.id === groupId);
+        if (!groupObj) throw new Error("Group not found");
+        
+        let lastRes = null;
+        for (const memberId of groupObj.members) {
+            if (memberId === senderId) continue; // No nos enviamos a nosotros mismos
+            try {
+                // Encriptamos para el grupo, pero enrutamos al memberId
+                lastRes = await this.sendBlob(senderId, groupId, payloadObj, memberId);
+            } catch (e) {
+                console.warn(`[SyncManager] Fallo enviando a miembro del grupo ${memberId}:`, e);
+            }
+        }
+        
+        if (!lastRes) {
+             // Fake response so UI doesn't crash if no members or all failed
+             return { signature: "group_" + Date.now() };
+        }
+        return lastRes;
+    }
+
+    async checkContactStatus(contactAlias) {
+        try {
+            const hash = await sha256(contactAlias);
+            const res = await fetch(`/api/status/${hash}`);
+            if (res.ok) {
+                const data = await res.json();
+                return data.online === true;
+            }
+        } catch (e) {
+            console.warn("Failed to check contact status:", e);
+        }
+        return false;
+    }
+
+    async _getSenderSphincsPk(senderId) {
+        if (this.sphincsKeysCache[senderId]) {
+            return this.sphincsKeysCache[senderId];
+        }
+        try {
+            const senderHash = await sha256(senderId);
+            const keysRes = await fetch(`/api/user/${senderHash}`);
+            if (keysRes.ok) {
+                const keys = await keysRes.json();
+                this.sphincsKeysCache[senderId] = keys.sphincs_pk_hex;
+                return keys.sphincs_pk_hex;
+            }
+        } catch (e) {
+            console.warn("Failed to fetch sender keys:", e);
+        }
+        return "none";
+    }
+
+    async getContactPublicKey(contactId) {
+        return await this._getSenderSphincsPk(contactId);
+    }
+}
+
+// Helpers
+function intTimestamp() {
+    return Math.floor(Date.now() / 1000);
+}
+
+function logger(msg) {
+    console.log(`[SyncManager] ${msg}`);
+}
+
+function hexToString(hex) {
+    let str = '';
+    for (let i = 0; i < hex.length; i += 2) {
+        str += String.fromCharCode(parseInt(hex.substr(i, 2), 16));
+    }
+    return str;
+}
+
+function stringToHex(str) {
+    let hex = '';
+    for (let i = 0; i < str.length; i++) {
+        hex += str.charCodeAt(i).toString(16).padStart(2, '0');
+    }
+    return hex;
+}
+
+async function sha256(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await hermesBridge.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function formatTime(ts) {
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}

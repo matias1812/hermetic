@@ -1,0 +1,9 @@
+Evidence
+
+Action: generate_identity (implicit in bundle)
+Implementation: Rust/WASM (hermes_crypto_wasm)
+Standard: FIPS 203 (ML-KEM-768), X25519, Ed25519
+
+Result:
+Identity keys initialized
+PASS

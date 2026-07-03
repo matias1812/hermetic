@@ -1,0 +1,27 @@
+# Core PQC — real ML-KEM-1024 and SPHINCS+ implementations
+pqcrypto>=0.17.0
+
+# Symmetric crypto — AES-256-GCM (AEAD), HKDF
+cryptography>=42.0.0
+
+# Secure XML parsing (defends against XXE/Billion Laughs)
+defusedxml>=0.7.1
+
+
+# Web framework + server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+websockets>=12.0
+
+# HTTP multipart support (FastAPI file uploads)
+python-multipart>=0.0.6
+
+# Database
+pymysql>=1.1.0
+
+# Steganography engine (experimental layer — not a security primitive)
+numpy>=1.26.0
+scipy>=1.12.0
+
+# Optional: Rust FFI build tool (only needed if compiling hermes-core)
+# maturin>=1.4.0

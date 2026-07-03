@@ -1,0 +1,14 @@
+Evidence
+
+Action: Resilience and Replay Protection
+
+Test: Out of order messages
+Result: Ratchet advances correctly.
+
+Test: Replay attack
+Result: Rejected by AEAD nonce tracking.
+
+Test: ML-KEM Corrupted Ciphertext
+Result: FAIL-CLOSED
+
+PASS

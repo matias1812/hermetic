@@ -1,0 +1,79 @@
+name: HermesChat Security CI & Supply Chain
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 2 * * *' # Fuzzing nocturno
+
+jobs:
+  audit-and-test:
+    name: Crypto Core Audit & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.80.0
+          target: wasm32-unknown-unknown
+          override: true
+
+      - name: Check Formatting & Lints
+        run: |
+          cd hermes_crypto_wasm
+          cargo fmt -- --check
+          cargo clippy -- -D warnings
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Run Hybrid PQC Tests (WASM)
+        run: |
+          cd hermes_crypto_wasm
+          wasm-pack test --node
+
+  fuzzing:
+    name: Continuous Fuzzing (Nightly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Nightly Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Fuzz PQC Handshake (Fail-Closed validation)
+        run: |
+          cd hermes_crypto_wasm
+          cargo +nightly fuzz run fuzz_handshake -- -max_total_time=300
+
+  supply-chain:
+    name: SLSA & SBOM Generation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx
+
+      - name: Generate SBOM
+        run: |
+          cd hermes_crypto_wasm
+          cargo cyclonedx -f json -a
+        
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: hermes-crypto-sbom
+          path: hermes_crypto_wasm/bom.json

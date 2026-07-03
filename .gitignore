@@ -1,0 +1,17 @@
+# Python cache and byte-code
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Rust target directories
+target/
+Cargo.lock
+
+# Databases
+*.db
+*.sqlite
+
+# IDEs
+.idea/
+.vscode/
+.gemini/

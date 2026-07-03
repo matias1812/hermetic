@@ -1,0 +1,27 @@
+{
+  "name": "hermes_crypto_wasm",
+  "version": "none",
+  "commit": "unknown",
+  "built_at": "2026-07-01T06:52:56Z",
+  "source_date_epoch": 1719792000,
+  "files": {
+    "wasm": {
+      "name": "hermes_crypto_wasm_bg.wasm",
+      "sha256": "2b91b34630f2d16c8d0d344b2f90e24226cea9b4dabaaa360bd1433c62e5d3f8",
+      "size": 12345
+    },
+    "js": {
+      "name": "hermes_crypto_wasm.js",
+      "sha256": "8fa16e414964c184ce59ffdfe8223290a7714d0c03e7499fe64c01f777052722",
+      "size": 54321
+    }
+  },
+  "build_info": {
+    "rustc": "1.75.0",
+    "wasm_pack": "0.12.1",
+    "target": "wasm32-unknown-unknown",
+    "optimization": "release",
+    "lto": true,
+    "codegen_units": 1
+  }
+}

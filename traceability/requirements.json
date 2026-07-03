@@ -1,0 +1,102 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-CRYPTO-001",
+      "title": "Cifrado Hibrido Post-Cuantico (ML-KEM-1024 + AES-256-GCM + SPHINCS+)",
+      "description": "El sistema DEBE implementar cifrado hibrido usando ML-KEM-1024 y AES-256-GCM con firmas SPHINCS+",
+      "priority": "CRITICAL",
+      "verification": "test",
+      "note": "HermesOTP.tla esta ARCHIVADO y NO debe citarse como evidencia. No existe spec TLA+ activa para este requisito (trabajo futuro).",
+      "implemented_by": [
+        "hermes_backend/crypto_core/kyber_manager.py",
+        "hermes_backend/crypto_core/sphincs_manager.py",
+        "hermes_backend/crypto_core/hybrid_encryptor.py"
+      ],
+      "tested_by": [
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_encrypt_decrypt_roundtrip",
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_wrong_recipient_cannot_decrypt",
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_signature_verification"
+      ],
+      "verified_by": [],
+      "static_analysis": [
+        "bandit -r hermes_backend/ (pendiente activar en CI)"
+      ]
+    },
+    {
+      "id": "REQ-AEAD-001",
+      "title": "Cifrado Autenticado con Datos Asociados (AAD)",
+      "description": "El cifrado AES-256-GCM DEBE incluir AAD con sender_id, receiver_id y timestamp para prevenir replay y confusion de contexto",
+      "priority": "CRITICAL",
+      "verification": "test",
+      "implemented_by": [
+        "hermes_backend/crypto_core/native_core.py::HermesNativeCore._build_aad",
+        "hermes_backend/crypto_core/native_core.py::HermesNativeCore.encrypt_envelope",
+        "hermes_backend/crypto_core/native_core.py::HermesNativeCore.decrypt_envelope"
+      ],
+      "tested_by": [
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_aad_roundtrip",
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_aad_mismatch_rejected",
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_native_core_aad_build"
+      ],
+      "verified_by": [],
+      "static_analysis": []
+    },
+    {
+      "id": "REQ-MEM-001",
+      "title": "Zeroizacion de Memoria Best-Effort",
+      "description": "El material de clave sensible DEBE sobreescribirse en memoria con ceros inmediatamente despues de su uso",
+      "priority": "CRITICAL",
+      "verification": "test+formal",
+      "tla_spec": "HermesMemory.tla",
+      "implemented_by": [
+        "hermes_backend/crypto_core/kyber_manager.py::KyberManager::derive_aes_key",
+        "hermes_backend/crypto_core/hybrid_encryptor.py::HybridPQCEncryptor::encrypt",
+        "hermes_backend/network_core/websocket_handler.py::_zeroize",
+        "hermes_backend/network_core/ephemeral_store.py::_zeroize"
+      ],
+      "tested_by": [
+        "hermes_backend/verification/memory_safety.py::MemorySafetyVerify::run_test"
+      ],
+      "verified_by": [
+        "formal_spec/tlaplus/HermesMemory.tla"
+      ],
+      "limitation": "Best-effort en Python. CPython GC no garantiza inmediatez. Ver THREAT_MODEL.md.",
+      "static_analysis": []
+    },
+    {
+      "id": "REQ-REGISTRY-001",
+      "title": "Registro de Claves de Sesion Usadas (Fail-Closed)",
+      "description": "El sistema DEBE verificar y registrar hashes de claves de sesion en base de datos de manera fail-closed para prevenir reuso",
+      "priority": "CRITICAL",
+      "verification": "test+formal",
+      "tla_spec": "HermesRegistry.tla",
+      "note": "El modulo se llama 'otp_registry' por razones historicas; no hay OTP en el sistema. El concepto que registra son hashes SHA3-256 de claves de sesion KEM.",
+      "implemented_by": [
+        "hermes_backend/network_core/otp_registry.py::OTPKeyRegistry",
+        "hermes_backend/network_core/db_connection.py::DatabaseConnection::register_otp_key"
+      ],
+      "tested_by": [],
+      "verified_by": [
+        "formal_spec/tlaplus/HermesRegistry.tla"
+      ],
+      "static_analysis": []
+    },
+    {
+      "id": "REQ-CONSTANT-001",
+      "title": "Uso de Bibliotecas Criptograficas Auditadas",
+      "description": "Toda criptografia DEBE usar bibliotecas estandar auditadas (pqcrypto, cryptography) en lugar de implementaciones propias",
+      "priority": "HIGH",
+      "verification": "code_review",
+      "implemented_by": [
+        "pqcrypto (ML-KEM-1024, SPHINCS+)",
+        "cryptography (AES-256-GCM via AESGCM)"
+      ],
+      "tested_by": [
+        "tests/test_hybrid_encryptor.py::TestHybridPQCEncryptor::test_encrypt_decrypt_roundtrip"
+      ],
+      "verified_by": [],
+      "limitation": "Constant-time garantizado por las bibliotecas, no por el codigo propio. Timing analysis heuristico en timing_analysis.py.",
+      "static_analysis": []
+    }
+  ]
+}
