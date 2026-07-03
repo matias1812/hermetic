@@ -64,4 +64,5 @@ Tiempos promedio de ejecución nativa:
 | Hybrid Test | `wasm-pack test --node` | Bloque 3 (hybrid_test.rs) |
 | Zeroize     | Inspección de `x3dh.rs` | Derivaciones `ZeroizeOnDrop` aplicadas |
 | WASM Opt    | `wasm-pack build` | Bloque 4 (pkg/hermes_crypto_wasm_bg.wasm) |
+| Frontend UI | `npm --prefix frontend run build` | Compilación Vite determinista |
 | Servidor Ciego | Inspección `main.py` | Línea: `access_log=False` |

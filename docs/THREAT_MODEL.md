@@ -8,7 +8,7 @@
 
 1. **Relevo Ciego No Confiable (Untrusted Blind Relay):**
    * Se asume que el servidor backend (FastAPI/Python) puede ser comprometido total o parcialmente, estar sujeto a escuchas legales, o ser administrado por un adversario pasivo/activo.
-   * Por diseño operativo, el servidor jamás almacena mensajes en disco ni posee llaves de descifrado. Solo enruta blobs de bytes cifrados (`blob`) y hashes de usuario (`recipient_id`).
+   * Por diseño operativo, el diseño del protocolo no requiere que el servidor posea material suficiente para descifrar los mensajes en cola o en tránsito ni posee llaves de sesión E2EE.
 
 2. **Aislamiento en Dispositivo del Cliente:**
    * Se asume que el sistema operativo y el navegador del usuario final están libres de malware de kernel (rootkits) o keyloggers activos durante la sesión.
@@ -22,7 +22,7 @@
 | **Ataques Cuánticos (Store-Now-Decrypt-Later SNDL)** | Integración **Híbrida Post-Cuántica (PQC)** utilizando **ML-KEM-768 (FIPS 203)**. Un adversario futuro no podrá descifrar la captura actual debido a la inquebrantabilidad cuántica de la llave compartida en la fase de Handshake. | 🛡️ **ALTO** |
 | **Intercepción en Tránsito (Man-in-the-Middle)** | Cifrado E2E autenticado (AES-GCM-256) con datos asociados (AAD) que enlazan emisor y receptor. El handshake X3DH requiere verificación de claves Ed25519. | 🛡️ **ESTRICTO** |
 | **Pérdida de Secreto Hacia Adelante / Atrás** | **Double Ratchet (Trinquete Doble):** Cada mensaje enviado o recibido avanza la llave de sesión efímera. La exposición de una llave actual no compromete mensajes pasados ni futuros tras la siguiente respuesta. | 🛡️ **ESTRICTO** |
-| **Compromiso del Servidor de Relevo** | Arquitectura **Blind Relay:** El servidor no tiene tablas de texto plano ni historial en base de datos; al reiniciarse o apagarse, la RAM transitoria se purga. | 🛡️ **ABSOLUTO** |
+| **Compromiso del Servidor de Relevo** | Arquitectura **Blind Relay:** Un compromiso del servidor no proporciona acceso directo al contenido cifrado bajo los supuestos del modelo (confidencialidad intacta), aunque un atacante podría afectar la disponibilidad (DoS) o manipular la entrega de metadatos en tránsito. | 🛡️ **ALTO (Confidencialidad E2EE)** |
 | **Dumps de Memoria RAM en Cliente** | Uso de **WebAssembly (Wasm en Rust)** para todas las operaciones criptográficas. Las claves privadas (X25519, Ed25519, ML-KEM) nunca tocan JavaScript y la memoria de Rust se limpia estrictamente usando el rasgo `ZeroizeOnDrop`. | 🛡️ **ALTO** |
 | **Análisis de Tráfico por Tamaño** | Esteganografía en SVG: ofuscación visual del payload transmitido. | 🛡️ **MEDIO** |
 

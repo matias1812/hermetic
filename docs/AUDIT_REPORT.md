@@ -28,12 +28,23 @@ La arquitectura criptográfica de HermesChat ha sido diseñada basándose en los
 | Estándar | Estado |
 |----------|--------|
 | FIPS 203 (ML-KEM) | ✅ Implementado |
-| FIPS 204 (ML-DSA) | ⏳ Pendiente |
+| FIPS 204 (ML-DSA) | 🧪 Integrado experimentalmente |
 | RFC 7748 (X25519) | ✅ Implementado |
 | RFC 8032 (Ed25519) | ✅ Implementado |
 | RFC 5869 (HKDF) | ✅ Implementado |
 | RFC 8439 (ChaCha20-Poly1305) | ✅ Implementado |
-| Double Ratchet Specification | ✅ Adaptado |
+| Double Ratchet Specification | ✅ Adaptado (ver matriz de subcomponentes) |
+| SBOM (CycloneDX) | ✅ Implementado |
+| Reproducible Builds | ✅ Implementado |
+
+#### Matriz de Estado: Double Ratchet Adaptado
+| Componente | Estado |
+|---|---|
+| **Root Ratchet** | Compatible (Derivación continua HKDF) |
+| **DH Ratchet** | Compatible (Intercambio asíncrono X25519) |
+| **Symmetric Ratchet** | Compatible (Cadenas de envío y recepción independientes) |
+| **Header Encryption** | No implementado en esta versión |
+| **PQC Hybrid Root** | Extensión propia (Inyección de secreto PQC en Root Key) |
 
 ---
 
@@ -47,8 +58,8 @@ Las siguientes propiedades deben mantenerse en cualquier versión de HermesChat:
 ✓ Todo mensaje utiliza AEAD autenticado.
 ✓ Todo fallo criptográfico termina en modo Fail-Closed.
 ✓ Toda clave temporal implementa `ZeroizeOnDrop`.
-✓ El backend nunca participa en operaciones criptográficas.
-✓ El servidor nunca posee secretos suficientes para descifrar mensajes.
+✓ El backend nunca participa en la criptografía E2EE.
+✓ El diseño del protocolo no requiere que el servidor posea material suficiente para descifrar los mensajes en cola o en tránsito.
 
 ---
 
@@ -57,19 +68,19 @@ Las siguientes propiedades deben mantenerse en cualquier versión de HermesChat:
 ### 3.1 Garantías del Backend
 El servidor (Blind Relay):
 ✓ No posee Root Keys.
-✓ No realiza operaciones criptográficas.
-✓ No descifra mensajes.
+✓ No participa en la derivación ni gestión de claves E2EE.
+✓ No descifra mensajes E2EE.
 ✓ No modifica ciphertexts.
-✓ No genera claves.
 ✓ No almacena secretos de sesión.
-✓ Sólo retransmite blobs cifrados.
+✓ El diseño del protocolo no requiere que el servidor posea material suficiente para descifrar los mensajes en cola o en tránsito.
 ✓ Elimina mensajes expirados según TTL.
 
 ### 3.2 Garantías del Puente FFI y Memoria
 ✓ JavaScript nunca deriva secretos ni calcula Root Keys o cadenas de Double Ratchet.
 ✓ Rust devuelve únicamente datos autorizados a través de los límites FFI.
+✓ **API FFI Determinista:** Todas las funciones FFI devuelven errores deterministas sin exponer material criptográfico sensible.
 ✓ **Verificación de Checksum en Runtime:** El frontend ([crypto_wasm_bridge.js](file:///c:/Users/matia/OneDrive/Desktop/hermeticos/frontend/src/js/crypto_wasm_bridge.js#L41-L57)) calcula en tiempo de ejecución el digest SHA-256 del binario cargado (`hermes_crypto_wasm_bg.wasm`), lo compara con el hash esperado de compilación (`WASM_EXPECTED_HASH`) y aborta la carga (*Fail-Closed*) si no coincide.
-✓ **Saneación de Memoria (`Zeroize`):** Las estructuras sensibles en Rust implementan correctamente `Zeroize` y `ZeroizeOnDrop` para sobrescribir explícitamente los buffers sensibles antes de liberar la memoria gestionada. *Nota:* `Zeroize` no puede garantizar por sí solo la ausencia de copias internas en registros CPU, optimizaciones del compilador o instantáneas (*snapshots*) del navegador o sistema operativo.
+✓ **Saneación de Memoria (`Zeroize`):** Las estructuras sensibles en Rust implementan correctamente `Zeroize` y `ZeroizeOnDrop`. *Limitación formal pericial:* Zeroize reduce la permanencia del secreto en memoria gestionada por Rust, pero no constituye una garantía formal frente a copias realizadas por el compilador, el sistema operativo o el hardware.
 ✓ Los errores criptográficos terminan en Fail-Closed sin exposición de estado intermedio.
 
 ### 3.3 Persistencia Local
@@ -128,12 +139,12 @@ Las suites de pruebas automatizadas **verifican experimentalmente** en este ento
 ✓ `Cargo.lock` versionado.
 ✓ Dependencias fijadas.
 ✓ Versiones documentadas.
+✓ SBOM (CycloneDX / SPDX automatizado en CI).
+✓ Reproducible Builds (compilación determinista en Docker).
 
 **Pendiente:**
-⏳ SBOM (CycloneDX o SPDX)
-⏳ Firmado de artefactos (Sigstore)
-⏳ SLSA
-⏳ Reproducible Builds
+⏳ Firmado de artefactos (Sigstore / Cosign)
+⏳ Atestación SLSA Level 3
 
 ---
 
@@ -142,12 +153,13 @@ Las suites de pruebas automatizadas **verifican experimentalmente** en este ento
 ✅ X25519
 ✅ Double Ratchet
 ✅ ML-KEM
-⏳ ML-DSA
-⏳ Hybrid Ratchet PQC
-⏳ Continuous Fuzzing
-⏳ Auditoría Externa
-⏳ Reproducible Builds
-⏳ Supply Chain Attestation
+✅ Reproducible Builds
+✅ SBOM Automatizado
+🧪 ML-DSA (Integrado experimentalmente en WASM/Fallback)
+⏳ Hybrid Ratchet PQC Completo
+⏳ Continuous Fuzzing Nocturno
+⏳ Auditoría Externa Acreditada
+⏳ Supply Chain Attestation (SLSA Level 3)
 
 ---
 
@@ -193,8 +205,8 @@ cargo check --target wasm32-unknown-unknown
 cargo test
 wasm-pack test --node
 cargo bench
-npm test
-npm run build
+npm --prefix frontend test
+npm --prefix frontend run build
 python main.py
 ```
 *(Cualquier advertencia de clippy o fallo en tests unitarios invalida las garantías del presente informe).*
