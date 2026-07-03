@@ -3,15 +3,50 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Python virtual environments & testing
+venv/
+.venv/
+env/
+ENV/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+coverage.xml
+
 # Rust target directories
 target/
 Cargo.lock
+
+# JavaScript / Node dependencies & build logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables, Secrets & Certificates
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
 
 # Databases
 *.db
 *.sqlite
 
-# IDEs
+# Logs & Scratch files
+logs/
+*.log
+scratch/
+
+# IDEs & OS files
 .idea/
 .vscode/
 .gemini/
+.DS_Store
+Thumbs.db
+
