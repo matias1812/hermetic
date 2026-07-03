@@ -441,7 +441,7 @@ impl HermesCore {
     /// Cifra el payload del backup local de manera hermética con XChaCha20Poly1305
     pub fn encrypt_with_recovery_key(&self, mnemonic: &str, data: &[u8]) -> Result<Vec<u8>, String> {
         let key = self.derive_recovery_key(mnemonic)?;
-        use chacha20poly1305::{XChaCha20Poly1305, Key, XNonce, aead::{Aead, AeadCore, KeyInit, OsRng}};
+        use chacha20poly1305::{XChaCha20Poly1305, Key, aead::{Aead, AeadCore, KeyInit, OsRng}};
         let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng); // 24-bytes
         

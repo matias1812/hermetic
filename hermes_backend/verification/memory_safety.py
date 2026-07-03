@@ -33,7 +33,7 @@ class MemorySafetyVerify:
             summary["metrics"]["all_bytes_zeroed"] = all_zeros
             
             if all_zeros:
-                summary["logs"].append("VERIFIED: In-memory bytearray buffer contents overwritten with zero bytes.")
+                summary["logs"].append("Observed behavior: In-memory bytearray buffer contents overwritten with zero bytes.")
                 summary["passed"] = True
             else:
                 summary["logs"].append("FAILED: Buffer contents remained intact after wipe command.")
@@ -44,3 +44,8 @@ class MemorySafetyVerify:
             summary["passed"] = False
             
         return summary
+
+if __name__ == '__main__':
+    import json
+    print(json.dumps(MemorySafetyVerify.run_test(), indent=2))
+

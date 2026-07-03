@@ -66,6 +66,9 @@ class TimingTestsVerify:
                 
         except Exception as e:
             summary["logs"].append(f"Execution failed: {e}")
-            summary["passed"] = False
-            
         return summary
+
+if __name__ == '__main__':
+    import json
+    print(json.dumps(TimingTestsVerify.run_test(), indent=2))
+

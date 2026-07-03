@@ -44,7 +44,7 @@ class RNGUniformityVerify:
             summary["metrics"]["expected_p"] = expected_p
             
             if passed_k0 and passed_k1:
-                summary["logs"].append("VERIFICADO: El generador del sistema operativo muestra distribución uniforme.")
+                summary["logs"].append("Observed behavior: El generador del sistema operativo muestra distribución uniforme en esta muestra.")
                 summary["passed"] = True
             else:
                 summary["logs"].append("FALLA: Distribución del RNG no es uniforme dentro de los márgenes estadísticos.")
@@ -55,3 +55,8 @@ class RNGUniformityVerify:
             summary["passed"] = False
             
         return summary
+
+if __name__ == '__main__':
+    import json
+    print(json.dumps(RNGUniformityVerify.run_test(), indent=2))
+

@@ -74,7 +74,7 @@ class EndToEndCryptoVerify:
             assert blob1 != blob2, "Error: Los textos cifrados deben diferir aunque el texto plano sea idéntico"
             assert pt_hex not in blob1, "Error crítico: El texto plano no puede aparecer en el texto cifrado"
             
-            summary["logs"].append("[OK] VERIFICADO: El texto plano jamás aparece en el payload. Nonce y ciphertext son 100% únicos por transmisión.")
+            summary["logs"].append("[OK] Observed behavior: El texto plano jamás aparece en el payload. Nonce y ciphertext son únicos por transmisión en esta prueba.")
             
             # 2. Prueba de Descifrado Correcto
             summary["logs"].append(f"\n[PRUEBA 2: Descifrado Legítimo Extremo a Extremo]")
@@ -87,7 +87,7 @@ class EndToEndCryptoVerify:
             dec_text = dec_bytes.decode('utf-8')
             summary["logs"].append(f"Texto recuperado por receptor legítimo: '{dec_text}'")
             assert dec_text == pt_text, "Error: El texto descifrado no coincide con el original"
-            summary["logs"].append("[OK] VERIFICADO: Integridad y confidencialidad E2E exactas.")
+            summary["logs"].append("[OK] Observed behavior: Integridad y confidencialidad E2E verificadas experimentalmente.")
             
             # 3. Prueba de Detección de Manipulación (Tamper Resistance / MITM)
             summary["logs"].append(f"\n[PRUEBA 3: Detección de Manipulación MITM en Tránsito]")
@@ -108,7 +108,7 @@ class EndToEndCryptoVerify:
                 summary["logs"].append(f"Excepción capturada legítimamente ante modificación MITM del sobre: {type(e).__name__} - {str(e)}")
                 
             assert tamper_detected, "Error: El sistema no detectó la manipulación del ciphertext"
-            summary["logs"].append("[OK] VERIFICADO: Cualquier modificación MITM invalida la autenticación AEAD y destruye el paquete.")
+            summary["logs"].append("[OK] Observed behavior: La modificación MITM invalida la autenticación AEAD y rechaza el paquete.")
             
             # 4. Prueba de Enlace Contextual AAD (Anti-Replay / Context Confusion)
             summary["logs"].append(f"\n[PRUEBA 4: Enlace Contextual AAD y Anti-Replay]")
@@ -128,7 +128,7 @@ class EndToEndCryptoVerify:
                 summary["logs"].append(f"Excepción capturada al cambiar destinatario en paquete interceptado: {type(e).__name__}")
                 
             assert aad_detected, "Error: El cambio de receptor debió fallar por verificación AAD"
-            summary["logs"].append("[OK] VERIFICADO: El sobre está enlazado criptográficamente al emisor, receptor y timestamp original via AAD.")
+            summary["logs"].append("[OK] Observed behavior: El sobre está enlazado criptográficamente al emisor, receptor y timestamp original via AAD.")
             
             summary["passed"] = True
             summary["metrics"] = {

@@ -5,7 +5,6 @@ use rand::rngs::OsRng;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use hkdf::Hkdf;
 use sha2::Sha256;
-use ml_kem::MlKem768;
 // Intentar usar kem traits si están re-exportados o en prelude, sino asumiremos métodos concretos
 
 /// Paquete de pre-claves publicado por Bob en el servidor (PreKeyBundle)
