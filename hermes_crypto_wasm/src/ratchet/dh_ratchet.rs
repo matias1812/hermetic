@@ -86,7 +86,8 @@ impl DHRatchet {
         hkdf.expand(b"root_key", &mut root_key).unwrap();
         hkdf.expand(b"chain_key", &mut chain_key).unwrap();
         hkdf.expand(b"header_key", &mut header_key).unwrap();
-        hkdf.expand(b"next_header_key", &mut next_header_key).unwrap();
+        hkdf.expand(b"next_header_key", &mut next_header_key)
+            .unwrap();
 
         state.root_key = root_key;
         state.dh_remote = Some(remote_public.to_bytes());
@@ -188,7 +189,8 @@ impl DHRatchet {
 
         let hkdf = Hkdf::<Sha512>::new(Some(&self.state.root_key), shared_secret.as_bytes());
         hkdf.expand(b"root_key", &mut self.state.root_key).unwrap();
-        hkdf.expand(b"chain_key", &mut self.state.receiving_chain_key).unwrap();
+        hkdf.expand(b"chain_key", &mut self.state.receiving_chain_key)
+            .unwrap();
 
         let mut nhk_r = [0u8; HEADER_KEY_SIZE];
         hkdf.expand(b"next_header_key", &mut nhk_r).unwrap();
@@ -210,12 +212,16 @@ impl DHRatchet {
 
         let hkdf2 = Hkdf::<Sha512>::new(Some(&self.state.root_key), shared_secret2.as_bytes());
         hkdf2.expand(b"root_key", &mut self.state.root_key).unwrap();
-        hkdf2.expand(b"chain_key", &mut self.state.sending_chain_key).unwrap();
+        hkdf2
+            .expand(b"chain_key", &mut self.state.sending_chain_key)
+            .unwrap();
 
         if let Some(nhk_s) = self.state.next_header_key_send {
             self.state.header_key_send = nhk_s;
         } else {
-            hkdf2.expand(b"header_key", &mut self.state.header_key_send).unwrap();
+            hkdf2
+                .expand(b"header_key", &mut self.state.header_key_send)
+                .unwrap();
         }
 
         let mut next_nhk_s = [0u8; HEADER_KEY_SIZE];
@@ -315,12 +321,15 @@ impl DHRatchet {
 
     // ─── SKIPPED KEYS ───
 
-    fn take_skipped_key(&mut self, header: &Header, message_number: u32) -> Option<[u8; MESSAGE_KEY_SIZE]> {
-        if let Some(idx) = self
-            .state
-            .skipped_keys
-            .iter()
-            .position(|sk| sk.dh_remote == header.dh_public && sk.message_number == message_number)
+    fn take_skipped_key(
+        &mut self,
+        header: &Header,
+        message_number: u32,
+    ) -> Option<[u8; MESSAGE_KEY_SIZE]> {
+        if let Some(idx) =
+            self.state.skipped_keys.iter().position(|sk| {
+                sk.dh_remote == header.dh_public && sk.message_number == message_number
+            })
         {
             let sk = self.state.skipped_keys.remove(idx);
             Some(sk.message_key)
@@ -329,7 +338,12 @@ impl DHRatchet {
         }
     }
 
-    fn skip_message_key_for_dh(&mut self, dh_remote: [u8; 32], message_number: u32, message_key: &[u8; MESSAGE_KEY_SIZE]) {
+    fn skip_message_key_for_dh(
+        &mut self,
+        dh_remote: [u8; 32],
+        message_number: u32,
+        message_key: &[u8; MESSAGE_KEY_SIZE],
+    ) {
         if self.state.skipped_keys.len() < MAX_SKIP as usize {
             self.state.skipped_keys.push(SkippedKey {
                 dh_remote,

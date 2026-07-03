@@ -30,6 +30,8 @@ jobs:
       run: bandit -r hermes_backend -ll -q
       
     - name: Run Unit & Property Tests with Coverage
+      env:
+        PYTHONPATH: .
       run: |
         pytest tests/test_hybrid_encryptor.py tests/phase7_audit.py --cov=hermes_backend --cov-report=xml
         

@@ -602,7 +602,7 @@ impl HermesCore {
         let vault_key = self
             .vault_key
             .ok_or_else(|| "Storage error: Vault key not available (vault locked)".to_string())?;
-        
+
         let vault_salt = self
             .vault_salt
             .ok_or_else(|| "Storage error: Vault salt not available".to_string())?;
@@ -648,17 +648,21 @@ impl HermesCore {
         Ok(final_payload)
     }
 
-    /// Descifrar datos de la bóveda (backup). 
+    /// Descifrar datos de la bóveda (backup).
     /// Si opt_password se provee, deriva la VaultKey desde el salt del backup.
     /// Si es nulo, asume que la bóveda está desbloqueada y usa la VaultKey en memoria.
-    pub fn decrypt_backup(&self, payload: &[u8], opt_password: Option<String>) -> Result<Vec<u8>, String> {
+    pub fn decrypt_backup(
+        &self,
+        payload: &[u8],
+        opt_password: Option<String>,
+    ) -> Result<Vec<u8>, String> {
+        use argon2::Argon2;
         use chacha20poly1305::{
             aead::{Aead, KeyInit, Payload},
             XChaCha20Poly1305, XNonce,
         };
         use hkdf::Hkdf;
         use sha2::Sha256;
-        use argon2::Argon2;
 
         // 1. Extraer header: 10 bytes magic + 16 bytes salt + 24 bytes nonce
         if payload.len() < 10 + 16 + 24 + 16 {
@@ -667,7 +671,9 @@ impl HermesCore {
 
         let magic = &payload[..10];
         if magic != b"HERMESBK\x01\x02" {
-            return Err("Versión de backup no soportada o archivo corrupto (se requiere v2)".to_string());
+            return Err(
+                "Versión de backup no soportada o archivo corrupto (se requiere v2)".to_string(),
+            );
         }
 
         let salt = &payload[10..26];
@@ -679,7 +685,8 @@ impl HermesCore {
         if let Some(password) = opt_password {
             // Derivar desde la contraseña y el salt extraído del backup
             let argon2 = Argon2::default();
-            argon2.hash_password_into(password.as_bytes(), salt, &mut vault_key)
+            argon2
+                .hash_password_into(password.as_bytes(), salt, &mut vault_key)
                 .map_err(|_| "Fallo derivando clave con Argon2id".to_string())?;
         } else {
             // Usar la de la sesión
@@ -709,9 +716,10 @@ impl HermesCore {
             aad,
         };
 
-        let plaintext = cipher
-            .decrypt(nonce, decrypt_payload)
-            .map_err(|_| "Fallo descifrando backup con AEAD (clave incorrecta o manipulación detectada)".to_string())?;
+        let plaintext = cipher.decrypt(nonce, decrypt_payload).map_err(|_| {
+            "Fallo descifrando backup con AEAD (clave incorrecta o manipulación detectada)"
+                .to_string()
+        })?;
 
         Ok(plaintext)
     }
