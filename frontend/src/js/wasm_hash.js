@@ -1,1 +1,1 @@
-export const WASM_EXPECTED_HASH = '2dd420dbd4f5b3cda58ea82a5edcec34d80bba1fce63aa267cf0ba9fa5392d9f';
+export const WASM_EXPECTED_HASH = 'f685a93e4070bbf220fc18aa5ab61e54d7a3f8432acaecbb19660aab8a3c64f8';

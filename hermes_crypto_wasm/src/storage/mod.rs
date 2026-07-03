@@ -104,6 +104,12 @@ pub struct MemoryStorageBackend {
     store: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
+impl Default for MemoryStorageBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryStorageBackend {
     pub fn new() -> Self {
         Self {
@@ -132,7 +138,8 @@ impl StorageBackend for MemoryStorageBackend {
 
     fn list_keys(&self, prefix: &str) -> Result<Vec<String>, String> {
         let map = self.store.lock().map_err(|e| e.to_string())?;
-        let keys = map.keys()
+        let keys = map
+            .keys()
             .filter(|k| k.starts_with(prefix))
             .cloned()
             .collect();

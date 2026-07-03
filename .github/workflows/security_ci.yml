@@ -13,7 +13,7 @@ jobs:
     name: Crypto Core Audit & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -21,6 +21,7 @@ jobs:
           profile: minimal
           toolchain: 1.80.0
           target: wasm32-unknown-unknown
+          components: rustfmt, clippy
           override: true
 
       - name: Check Formatting & Lints
@@ -42,7 +43,7 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install Nightly Rust
         uses: actions-rs/toolchain@v1
@@ -62,10 +63,12 @@ jobs:
     name: SLSA & SBOM Generation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Install cargo-cyclonedx
-        run: cargo install cargo-cyclonedx
+      - name: Install cargo-binstall & cargo-cyclonedx
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall -y cargo-cyclonedx
 
       - name: Generate SBOM
         run: |
@@ -73,7 +76,7 @@ jobs:
           cargo cyclonedx -f json -a
         
       - name: Upload SBOM
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: hermes-crypto-sbom
           path: hermes_crypto_wasm/bom.json

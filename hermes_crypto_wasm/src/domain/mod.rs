@@ -1,8 +1,8 @@
-use crate::storage::{StorageBackend, StorageEngine, SecureBuffer};
 use crate::ratchet::RatchetManager;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use crate::storage::{SecureBuffer, StorageBackend, StorageEngine};
 use std::collections::HashMap;
 use x25519_dalek::PublicKey;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Identificador único de mensaje generado en memoria
 pub type MessageId = String;
@@ -30,6 +30,12 @@ pub struct KeyManager {
     public_keys: HashMap<String, Vec<u8>>,
 }
 
+impl Default for KeyManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyManager {
     pub fn new() -> Self {
         Self {
@@ -40,8 +46,10 @@ impl KeyManager {
 
     /// Guarda par de claves en memoria segura.
     pub fn store_keypair(&mut self, key_id: &str, priv_key: &[u8], pub_key: &[u8]) {
-        self.private_keys.insert(key_id.to_string(), PrivateKey::new(priv_key));
-        self.public_keys.insert(key_id.to_string(), pub_key.to_vec());
+        self.private_keys
+            .insert(key_id.to_string(), PrivateKey::new(priv_key));
+        self.public_keys
+            .insert(key_id.to_string(), pub_key.to_vec());
     }
 
     /// MÉTODO PRIVADO: Retorna referencia a la clave privada solo dentro de Rust.
@@ -75,7 +83,11 @@ impl<B: StorageBackend> HermesCore<B> {
     }
 
     /// Guardar estado con VERIFICACIÓN de integridad (Talón de Aquiles #1 resuelto).
-    pub fn save_state_with_verification(&self, session_id: &str, state_blob: &[u8]) -> Result<(), String> {
+    pub fn save_state_with_verification(
+        &self,
+        session_id: &str,
+        state_blob: &[u8],
+    ) -> Result<(), String> {
         // 1. Guardar estado
         self.storage.save_ratchet_state(session_id, state_blob)?;
 
@@ -103,15 +115,27 @@ impl<B: StorageBackend> HermesCore<B> {
     }
 
     /// Inicializa una nueva conversación segura y persiste con verificación read-back.
-    pub fn init_conversation(&mut self, session_id: &str, shared_secret: &[u8; 32], remote_public: PublicKey) -> Result<(), String> {
-        self.ratchet_manager.init_session(session_id, shared_secret, remote_public);
+    pub fn init_conversation(
+        &mut self,
+        session_id: &str,
+        shared_secret: &[u8; 32],
+        remote_public: PublicKey,
+    ) -> Result<(), String> {
+        self.ratchet_manager
+            .init_session(session_id, shared_secret, remote_public);
         self.save_state_with_verification(session_id, b"ratchet-state-v8-verified")?;
         Ok(())
     }
 
     /// Cifra y prepara el envío aplicando bloques de tamaño fijo para mitigar análisis de tráfico.
-    pub fn send_message(&mut self, session_id: &str, plaintext: &[u8]) -> Result<(MessageId, Vec<u8>), String> {
-        let ratchet = self.ratchet_manager.get_ratchet_mut(session_id)
+    pub fn send_message(
+        &mut self,
+        session_id: &str,
+        plaintext: &[u8],
+    ) -> Result<(MessageId, Vec<u8>), String> {
+        let ratchet = self
+            .ratchet_manager
+            .get_ratchet_mut(session_id)
             .ok_or_else(|| format!("Sesión de trinquete no encontrada: {}", session_id))?;
 
         // Enmascaramiento de longitud mediante padding a bloque fijo
@@ -127,14 +151,21 @@ impl<B: StorageBackend> HermesCore<B> {
     }
 
     /// Descifra un mensaje recibido y avanza el trinquete en consecuencia.
-    pub fn receive_message(&mut self, session_id: &str, envelope_bytes: &[u8]) -> Result<Vec<u8>, String> {
-        let ratchet = self.ratchet_manager.get_ratchet_mut(session_id)
+    pub fn receive_message(
+        &mut self,
+        session_id: &str,
+        envelope_bytes: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let ratchet = self
+            .ratchet_manager
+            .get_ratchet_mut(session_id)
             .ok_or_else(|| format!("Sesión de trinquete no encontrada: {}", session_id))?;
 
         let encrypted: crate::ratchet::EncryptedMessage = bincode::deserialize(envelope_bytes)
             .map_err(|e| format!("Error deserializando sobre: {}", e))?;
 
-        let padded_plaintext = ratchet.decrypt(&encrypted, b"hermes-v8-envelope")
+        let padded_plaintext = ratchet
+            .decrypt(&encrypted, b"hermes-v8-envelope")
             .map_err(|e| format!("Error descifrando trinquete: {}", e))?;
 
         // Quitar padding nulo

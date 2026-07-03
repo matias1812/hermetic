@@ -16,18 +16,18 @@
 // TESTS NATIVOS (sin WASM):
 //   cargo test --all-features
 
-pub mod storage;
-pub mod ratchet;
-pub mod domain;
 pub mod core_api;
+pub mod domain;
+pub mod ratchet;
+pub mod storage;
 
-use wasm_bindgen::prelude::*;
-use zeroize::Zeroize;
+use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
-use chacha20poly1305::{XChaCha20Poly1305, KeyInit, aead::Aead};
 use rand::rngs::OsRng;
 use rand::RngCore;
-use sha3::{Sha3_256, Digest};
+use sha3::{Digest, Sha3_256};
+use wasm_bindgen::prelude::*;
+use zeroize::Zeroize;
 
 /// Tamaño del nonce XChaCha20 en bytes (192 bits = 24 bytes)
 const NONCE_SIZE: usize = 24;
@@ -42,6 +42,12 @@ pub struct HermesCrypto {
     message_counter: u64,
 }
 
+impl Default for HermesCrypto {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl HermesCrypto {
     /// Constructor: genera clave aleatoria via OsRng.
@@ -51,10 +57,10 @@ impl HermesCrypto {
         let mut key = [0u8; 32];
         OsRng.fill_bytes(&mut key);
 
-        let instance = Self { 
-            key, 
-            version: 1, 
-            message_counter: 0 
+        let instance = Self {
+            key,
+            version: 1,
+            message_counter: 0,
         };
 
         // Zeroizar el buffer temporal de la pila
@@ -90,7 +96,13 @@ impl HermesCrypto {
     /// # Panics
     /// Pánico si `a.len() != b.len()` — no opera con longitudes distintas.
     pub fn constant_time_xor(&self, a: &[u8], b: &[u8]) -> Vec<u8> {
-        assert_eq!(a.len(), b.len(), "XOR length mismatch: {} vs {}", a.len(), b.len());
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "XOR length mismatch: {} vs {}",
+            a.len(),
+            b.len()
+        );
 
         // Loop sin ramas explícitas sobre datos secretos.
         // El compilador genera SIMD automático (xorps/vpxor) en release mode.
@@ -177,7 +189,8 @@ impl HermesCrypto {
         let aad = [
             &self.version.to_be_bytes()[..],
             &self.message_counter.to_be_bytes()[..],
-        ].concat();
+        ]
+        .concat();
 
         let payload = chacha20poly1305::aead::Payload {
             msg: plaintext,
@@ -226,7 +239,8 @@ impl HermesCrypto {
         let aad = [
             &self.version.to_be_bytes()[..],
             &self.message_counter.to_be_bytes()[..],
-        ].concat();
+        ]
+        .concat();
 
         let payload = chacha20poly1305::aead::Payload {
             msg: ciphertext,
@@ -235,12 +249,12 @@ impl HermesCrypto {
 
         // decrypt() verifica el tag (y AAD) en tiempo constante internamente
         let result = cipher.decrypt(&nonce.into(), payload).ok();
-        
+
         // Si el descifrado es exitoso, avanzamos el contador
         if result.is_some() {
             self.message_counter += 1;
         }
-        
+
         result
     }
 
@@ -270,6 +284,12 @@ pub struct HermesEngineWasm {
     core: HermesCore<MemoryStorageBackend>,
 }
 
+impl Default for HermesEngineWasm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl HermesEngineWasm {
     #[wasm_bindgen(constructor)]
@@ -280,9 +300,16 @@ impl HermesEngineWasm {
     }
 
     #[wasm_bindgen]
-    pub fn init_conversation(&mut self, session_id: &str, shared_secret: &[u8], remote_pub: &[u8]) -> Result<(), JsValue> {
+    pub fn init_conversation(
+        &mut self,
+        session_id: &str,
+        shared_secret: &[u8],
+        remote_pub: &[u8],
+    ) -> Result<(), JsValue> {
         if shared_secret.len() != 32 || remote_pub.len() != 32 {
-            return Err(JsValue::from_str("shared_secret y remote_pub deben tener exactamente 32 bytes"));
+            return Err(JsValue::from_str(
+                "shared_secret y remote_pub deben tener exactamente 32 bytes",
+            ));
         }
         let mut secret_arr = [0u8; 32];
         secret_arr.copy_from_slice(shared_secret);
@@ -290,20 +317,28 @@ impl HermesEngineWasm {
         pub_arr.copy_from_slice(remote_pub);
         let remote_public = x25519_dalek::PublicKey::from(pub_arr);
 
-        self.core.init_conversation(session_id, &secret_arr, remote_public)
+        self.core
+            .init_conversation(session_id, &secret_arr, remote_public)
             .map_err(|e| JsValue::from_str(&e))
     }
 
     #[wasm_bindgen]
     pub fn send_message(&mut self, session_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, JsValue> {
-        let (_id, envelope) = self.core.send_message(session_id, plaintext)
+        let (_id, envelope) = self
+            .core
+            .send_message(session_id, plaintext)
             .map_err(|e| JsValue::from_str(&e))?;
         Ok(envelope)
     }
 
     #[wasm_bindgen]
-    pub fn receive_message(&mut self, session_id: &str, envelope_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
-        self.core.receive_message(session_id, envelope_bytes)
+    pub fn receive_message(
+        &mut self,
+        session_id: &str,
+        envelope_bytes: &[u8],
+    ) -> Result<Vec<u8>, JsValue> {
+        self.core
+            .receive_message(session_id, envelope_bytes)
             .map_err(|e| JsValue::from_str(&e))
     }
 
@@ -334,7 +369,9 @@ impl WasmDoubleRatchet {
     #[wasm_bindgen(constructor)]
     pub fn new(shared_secret: &[u8], remote_pub: &[u8]) -> Result<WasmDoubleRatchet, JsValue> {
         if shared_secret.len() != 32 || remote_pub.len() != 32 {
-            return Err(JsValue::from_str("shared_secret y remote_pub deben tener exactamente 32 bytes"));
+            return Err(JsValue::from_str(
+                "shared_secret y remote_pub deben tener exactamente 32 bytes",
+            ));
         }
         let mut secret_arr = [0u8; 32];
         secret_arr.copy_from_slice(shared_secret);
@@ -358,7 +395,8 @@ impl WasmDoubleRatchet {
     pub fn decrypt(&mut self, envelope_bytes: &[u8], aad: &[u8]) -> Result<Vec<u8>, JsValue> {
         let encrypted: crate::ratchet::EncryptedMessage = bincode::deserialize(envelope_bytes)
             .map_err(|e| JsValue::from_str(&format!("Error deserializando: {}", e)))?;
-        self.inner.decrypt(&encrypted, aad)
+        self.inner
+            .decrypt(&encrypted, aad)
             .map_err(|e| JsValue::from_str(&format!("Error descifrando: {}", e)))
     }
 }
@@ -389,7 +427,11 @@ mod tests {
         let ciphertext = crypto.constant_time_xor(p, k);
         let recovered = crypto.constant_time_xor(&ciphertext, k);
 
-        assert_eq!(p, recovered.as_slice(), "XOR debe ser su propio inverso: A^B^B = A");
+        assert_eq!(
+            p,
+            recovered.as_slice(),
+            "XOR debe ser su propio inverso: A^B^B = A"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -410,7 +452,10 @@ mod tests {
         let crypto = HermesCrypto::new();
         let a = vec![0xABu8; 64];
         let b = vec![0xABu8; 64];
-        assert!(crypto.constant_time_compare(&a, &b), "Bytes idénticos deben comparar como iguales");
+        assert!(
+            crypto.constant_time_compare(&a, &b),
+            "Bytes idénticos deben comparar como iguales"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -423,7 +468,10 @@ mod tests {
         let mut b = vec![0xAAu8; 64];
         b[63] = 0xBB; // Un byte diferente al final
 
-        assert!(!crypto.constant_time_compare(&a, &b), "Bytes distintos deben comparar como diferentes");
+        assert!(
+            !crypto.constant_time_compare(&a, &b),
+            "Bytes distintos deben comparar como diferentes"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -438,8 +486,14 @@ mod tests {
 
         let result = crypto.secure_zeroize(&mut secret);
 
-        assert!(result, "secure_zeroize debe retornar true cuando la zeroización es verificable");
-        assert!(secret.iter().all(|&x| x == 0), "Todos los bytes deben ser 0 post-zeroización");
+        assert!(
+            result,
+            "secure_zeroize debe retornar true cuando la zeroización es verificable"
+        );
+        assert!(
+            secret.iter().all(|&x| x == 0),
+            "Todos los bytes deben ser 0 post-zeroización"
+        );
         assert_ne!(secret, original_clone, "El buffer debe haber cambiado");
     }
 
@@ -454,8 +508,14 @@ mod tests {
         let mut already_clean = vec![0u8; 128];
         let result = crypto.secure_zeroize(&mut already_clean);
 
-        assert!(result, "Buffer ya-zeroizado debe retornar true (ya está limpio)");
-        assert!(already_clean.iter().all(|&x| x == 0), "Todos los bytes deben seguir siendo 0");
+        assert!(
+            result,
+            "Buffer ya-zeroizado debe retornar true (ya está limpio)"
+        );
+        assert!(
+            already_clean.iter().all(|&x| x == 0),
+            "Todos los bytes deben seguir siendo 0"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -465,7 +525,10 @@ mod tests {
     fn test_secure_zeroize_empty_buffer() {
         let crypto = HermesCrypto::new();
         let mut empty: Vec<u8> = vec![];
-        assert!(crypto.secure_zeroize(&mut empty), "Buffer vacío debe retornar true");
+        assert!(
+            crypto.secure_zeroize(&mut empty),
+            "Buffer vacío debe retornar true"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -473,7 +536,7 @@ mod tests {
     // -------------------------------------------------------------------------
     #[test]
     fn test_aead_encrypt_decrypt_roundtrip() {
-        let mut crypto = HermesCrypto::new(); 
+        let mut crypto = HermesCrypto::new();
 
         let plaintext = b"Mensaje secreto de HermesChat con AES-256-GCM!";
 
@@ -484,10 +547,15 @@ mod tests {
         // Reset the message counter to test decryption on the same instance
         crypto.message_counter = 0;
 
-        let decrypted = crypto.decrypt_aead(&ciphertext)
+        let decrypted = crypto
+            .decrypt_aead(&ciphertext)
             .expect("Descifrado debe tener éxito con el mismo HermesCrypto");
 
-        assert_eq!(decrypted.as_slice(), plaintext, "El plaintext debe recuperarse exactamente");
+        assert_eq!(
+            decrypted.as_slice(),
+            plaintext,
+            "El plaintext debe recuperarse exactamente"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -508,7 +576,10 @@ mod tests {
 
         let result = crypto.decrypt_aead(&ciphertext);
 
-        assert!(result.is_none(), "AES-GCM debe detectar manipulación y retornar None");
+        assert!(
+            result.is_none(),
+            "AES-GCM debe detectar manipulación y retornar None"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -521,7 +592,10 @@ mod tests {
         let too_short = vec![0u8; 10]; // < NONCE_SIZE + TAG_SIZE = 28
         let result = crypto.decrypt_aead(&too_short);
 
-        assert!(result.is_none(), "Ciphertext demasiado corto debe retornar None, no panic");
+        assert!(
+            result.is_none(),
+            "Ciphertext demasiado corto debe retornar None, no panic"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -529,17 +603,23 @@ mod tests {
     // -------------------------------------------------------------------------
     #[test]
     fn test_nonce_uniqueness_per_encryption() {
-        let mut crypto = HermesCrypto::new(); 
+        let mut crypto = HermesCrypto::new();
 
         let c1 = crypto.encrypt_aead(b"mensaje 1");
         let c2 = crypto.encrypt_aead(b"mensaje 1"); // mismo plaintext
 
         // Los primeros 12 bytes (nonce) deben ser diferentes (nonce aleatorio OsRng)
-        assert_ne!(&c1[..NONCE_SIZE], &c2[..NONCE_SIZE],
-            "Nonces aleatorios deben ser únicos con probabilidad 1 - 2^{{-96}}");
+        assert_ne!(
+            &c1[..NONCE_SIZE],
+            &c2[..NONCE_SIZE],
+            "Nonces aleatorios deben ser únicos con probabilidad 1 - 2^{{-96}}"
+        );
 
         // Y el ciphertext total también diferente
-        assert_ne!(c1, c2, "Ciphertexts deben diferir aunque el plaintext sea igual");
+        assert_ne!(
+            c1, c2,
+            "Ciphertexts deben diferir aunque el plaintext sea igual"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -558,8 +638,10 @@ mod tests {
 
         // La nueva instancia NO puede descifrar el ciphertext de la primera
         let result = crypto2.decrypt_aead(&ciphertext);
-        assert!(result.is_none(),
-            "Instancia con clave diferente NO debe poder descifrar ciphertext ajeno");
+        assert!(
+            result.is_none(),
+            "Instancia con clave diferente NO debe poder descifrar ciphertext ajeno"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -567,7 +649,10 @@ mod tests {
     // -------------------------------------------------------------------------
     #[test]
     fn test_key_size_is_256_bits() {
-        assert_eq!(HermesCrypto::key_size_bytes(), 32,
-            "AES-256-GCM debe usar clave de 32 bytes (256 bits)");
+        assert_eq!(
+            HermesCrypto::key_size_bytes(),
+            32,
+            "AES-256-GCM debe usar clave de 32 bytes (256 bits)"
+        );
     }
 }

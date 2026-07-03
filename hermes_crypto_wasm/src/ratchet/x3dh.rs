@@ -1,10 +1,10 @@
-use serde::{Serialize, Deserialize};
-use x25519_dalek::{StaticSecret, PublicKey};
-use ed25519_dalek::{VerifyingKey, Signer, SigningKey, Signature};
-use rand::rngs::OsRng;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
+use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 // Intentar usar kem traits si están re-exportados o en prelude, sino asumiremos métodos concretos
 
 /// Paquete de pre-claves publicado por Bob en el servidor (PreKeyBundle)
@@ -16,9 +16,9 @@ pub struct PreKeyBundle {
     pub signed_pre_key_signature: Vec<u8>,
     pub one_time_pre_key: Option<[u8; 32]>,
     pub one_time_pre_key_id: Option<String>,
-    pub pqc_public_key: Vec<u8>, // ML-KEM-768 Public Key (1184 bytes)
+    pub pqc_public_key: Vec<u8>,   // ML-KEM-768 Public Key (1184 bytes)
     pub mldsa_public_key: Vec<u8>, // ML-DSA-44 PK
-    pub mldsa_signature: Vec<u8>, // ML-DSA Signature over SPK
+    pub mldsa_signature: Vec<u8>,  // ML-DSA Signature over SPK
 }
 
 /// Saludo inicial enviado por Alice en el primer mensaje (InitialHandshake)
@@ -63,7 +63,8 @@ pub fn generate_prekey_bundle(
 
     // Firma Post-Cuántica (ML-DSA-44)
     // Convertimos el seed de 32 bytes al tipo `Seed` que ml_dsa espera (típicamente [u8; 32])
-    let mldsa_signing_key = ml_dsa::SigningKey::<ml_dsa::MlDsa44>::from_seed(mldsa_secret_seed.into());
+    let mldsa_signing_key =
+        ml_dsa::SigningKey::<ml_dsa::MlDsa44>::from_seed(mldsa_secret_seed.into());
     use ml_dsa::Keypair;
     let mldsa_pub_key = mldsa_signing_key.verifying_key();
     use ml_dsa::signature::Signer;
@@ -98,29 +99,43 @@ pub fn generate_prekey_bundle(
 pub fn initiator_x3dh(
     sender_ik_secret_bytes: &[u8; 32],
     bundle: &PreKeyBundle,
-    pqc_ciphertext_out: &mut Vec<u8>,
-    pqc_shared_secret_out: &mut Vec<u8>,
+    pqc_ciphertext_out: &[u8],
+    pqc_shared_secret_out: &[u8],
 ) -> Result<([u8; 32], InitialHandshake), String> {
     // 1A. Verificar firma Ed25519 sobre SPK
     let verifying_key = VerifyingKey::from_bytes(&bundle.signing_key)
         .map_err(|e| format!("Clave de firma Ed25519 inválida: {}", e))?;
     let sig_arr = Signature::from_slice(&bundle.signed_pre_key_signature)
         .map_err(|e| format!("Formato de firma SPK inválido: {}", e))?;
-    
-    verifying_key.verify_strict(&bundle.signed_pre_key, &sig_arr)
-        .map_err(|_| "FATAL: Verificación de firma Ed25519 fallida. Posible ataque MitM.".to_string())?;
+
+    verifying_key
+        .verify_strict(&bundle.signed_pre_key, &sig_arr)
+        .map_err(|_| {
+            "FATAL: Verificación de firma Ed25519 fallida. Posible ataque MitM.".to_string()
+        })?;
 
     // 1B. Verificar firma ML-DSA-44 sobre SPK (Protección Post-Cuántica de Identidad)
-    let vk_bytes = bundle.mldsa_public_key.as_slice().try_into().map_err(|_| "Longitud PK ML-DSA inválida")?;
+    let vk_bytes = bundle
+        .mldsa_public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Longitud PK ML-DSA inválida")?;
     let mldsa_vk = ml_dsa::VerifyingKey::<ml_dsa::MlDsa44>::decode(&vk_bytes);
-    
-    let sig_bytes = bundle.mldsa_signature.as_slice().try_into().map_err(|_| "Longitud Firma ML-DSA inválida")?;
+
+    let sig_bytes = bundle
+        .mldsa_signature
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Longitud Firma ML-DSA inválida")?;
     let mldsa_sig = ml_dsa::Signature::<ml_dsa::MlDsa44>::decode(&sig_bytes)
         .ok_or("Firma ML-DSA malformada".to_string())?;
 
     use ml_dsa::signature::Verifier;
-    mldsa_vk.verify(&bundle.signed_pre_key, &mldsa_sig)
-        .map_err(|_| "FATAL: Verificación de firma PQC (ML-DSA) fallida. Identidad comprometida.".to_string())?;
+    mldsa_vk
+        .verify(&bundle.signed_pre_key, &mldsa_sig)
+        .map_err(|_| {
+            "FATAL: Verificación de firma PQC (ML-DSA) fallida. Identidad comprometida.".to_string()
+        })?;
 
     // 2. Claves de Alice
     let ik_a_secret = StaticSecret::from(*sender_ik_secret_bytes);
@@ -168,7 +183,7 @@ pub fn initiator_x3dh(
         sender_ephemeral_key: ek_a_pub.to_bytes(),
         sender_identity_key: ik_a_pub.to_bytes(),
         one_time_pre_key_id: bundle.one_time_pre_key_id.clone(),
-        pqc_ciphertext: pqc_ciphertext_out.clone(),
+        pqc_ciphertext: pqc_ciphertext_out.to_vec(),
     };
 
     Ok((sk, handshake))
@@ -209,7 +224,7 @@ pub fn responder_x3dh(
     let mut hybrid_ikm = Vec::with_capacity(32 + pqc_shared_secret_bytes.len());
     hybrid_ikm.extend_from_slice(&sk_x25519);
     hybrid_ikm.extend_from_slice(pqc_shared_secret_bytes);
-    
+
     sk_x25519.zeroize();
 
     let hkdf = Hkdf::<Sha256>::new(Some(b"HermesHybrid_v1"), &hybrid_ikm);
