@@ -11,12 +11,12 @@
 - Web Locks
 - Auto Backup
 - Continuous Fuzzing (Nightly CI)
-- Reproducible Builds (Docker aisaldo)
 - Supply Chain CI/CD (GitHub Actions)
-- SBOM (CycloneDX Automatizado)
+- SBOM (Implementado en CI - Generación automática CycloneDX en pipeline)
 
-## En Evaluación / Integrado Experimentalmente 🧪
-- ML-DSA (FIPS 204 - Integrado en dependencias de WASM y evaluado en Fallback SPHINCS+)
+## Infraestructura / Integrado Experimentalmente 🧪
+- ML-DSA (FIPS 204 - Integrado funcionalmente en dependencias de WASM y evaluado en Fallback SPHINCS+)
+- Reproducible Builds (Infraestructura Docker implementada; verificación de reconstrucción independiente en curso)
 
 ## Pendiente ⏳
 - Hybrid Ratchet PQC Completo

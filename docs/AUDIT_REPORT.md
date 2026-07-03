@@ -33,18 +33,22 @@ La arquitectura criptográfica de HermesChat ha sido diseñada basándose en los
 | RFC 8032 (Ed25519) | ✅ Implementado |
 | RFC 5869 (HKDF) | ✅ Implementado |
 | RFC 8439 (ChaCha20-Poly1305) | ✅ Implementado |
-| Double Ratchet Specification | ✅ Adaptado (ver matriz de subcomponentes) |
-| SBOM (CycloneDX) | ✅ Implementado |
-| Reproducible Builds | ✅ Implementado |
+| Double Ratchet Specification | ✅ Adaptado (ver matriz inferior) |
+| SBOM (CycloneDX/SPDX) | ⚙️ Implementado en CI (Generación automática en pipeline) |
+| Reproducible Builds | 🏗️ Infraestructura implementada (Verificación externa en curso) |
 
-#### Matriz de Estado: Double Ratchet Adaptado
-| Componente | Estado |
-|---|---|
-| **Root Ratchet** | Compatible (Derivación continua HKDF) |
-| **DH Ratchet** | Compatible (Intercambio asíncrono X25519) |
-| **Symmetric Ratchet** | Compatible (Cadenas de envío y recepción independientes) |
-| **Header Encryption** | No implementado en esta versión |
-| **PQC Hybrid Root** | Extensión propia (Inyección de secreto PQC en Root Key) |
+> **Definición pericial de estados:**
+> * **Integrado experimentalmente:** Existen implementaciones funcionales y pruebas internas en la arquitectura (WASM/Fallback), pero la integración en todas las rutas de producción o su despliegue definitivo aún está en progreso.
+> * **Infraestructura implementada:** Existe el entorno de compilación determinista y generación de checksums SHA-256, pero aún está pendiente la atestación externa mediante reconstrucciones independientes cruzadas.
+
+#### Matriz Trazable de Subcomponentes: Double Ratchet Adaptado
+| Componente | Estado | Referencia | Observaciones / Alcance |
+|---|---|---|---|
+| **Root Ratchet** | Compatible | Signal Spec §3.3 | Derivación continua mediante HKDF(X25519 \|\| ML-KEM). |
+| **DH Ratchet** | Compatible | Signal Spec §3.2 | Intercambio asíncrono efímero con curvas X25519. |
+| **Symmetric Ratchet** | Compatible | Signal Spec §3.1 | Cadenas hash independientes para envío (`send_chain`) y recepción (`recv_chain`). |
+| **Header Encryption** | No implementado | Signal Spec §4 | Fuera del alcance de esta versión (opcional por diseño Blind Relay de enrutamiento). |
+| **PQC Hybrid Root** | Extensión propia | Draft IETF PQC | Inyección de secreto post-cuántico encapsulado en la derivación de Root Key. |
 
 ---
 
@@ -139,8 +143,8 @@ Las suites de pruebas automatizadas **verifican experimentalmente** en este ento
 ✓ `Cargo.lock` versionado.
 ✓ Dependencias fijadas.
 ✓ Versiones documentadas.
-✓ SBOM (CycloneDX / SPDX automatizado en CI).
-✓ Reproducible Builds (compilación determinista en Docker).
+✓ SBOM (Generación automática CycloneDX en CI pipeline).
+✓ Reproducible Builds (Infraestructura Docker implementada; verificación externa en curso).
 
 **Pendiente:**
 ⏳ Firmado de artefactos (Sigstore / Cosign)
@@ -153,8 +157,8 @@ Las suites de pruebas automatizadas **verifican experimentalmente** en este ento
 ✅ X25519
 ✅ Double Ratchet
 ✅ ML-KEM
-✅ Reproducible Builds
-✅ SBOM Automatizado
+⚙️ SBOM Automatizado en CI Pipeline
+🏗️ Reproducible Builds (Infraestructura implementada)
 🧪 ML-DSA (Integrado experimentalmente en WASM/Fallback)
 ⏳ Hybrid Ratchet PQC Completo
 ⏳ Continuous Fuzzing Nocturno
