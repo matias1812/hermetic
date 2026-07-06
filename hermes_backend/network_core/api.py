@@ -125,6 +125,9 @@ ws_manager = BlindWSManager()
 class KeyRegistration(BaseModel):
     client_id: str  # id_hash (SHA3-256 de alias)
     password: str = "" # legacy compatibility # nosemgrep
+    # Legacy protocol field names:
+    # Browser clients currently send X25519 public keys in kyber_pk_hex and Ed25519 public keys in sphincs_pk_hex.
+    # Native PQ clients send real ML-KEM-768 and SPHINCS+ keys respectively.
     kyber_pk_hex: str
     sphincs_pk_hex: str
 

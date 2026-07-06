@@ -64,6 +64,12 @@ export class LocalContactManager {
         }
         this.sharedKeys[contactId] = sharedKey;
         await this.save(storage);
+
+        if (typeof window !== 'undefined' && window.state?.sync?.getOrInitRatchet) {
+            window.state.sync.getOrInitRatchet(contactId).catch(err => {
+                console.warn(`[DoubleRatchet] Post-accept init error for ${contactId}:`, err);
+            });
+        }
     }
 
     async rejectRequest(storage, contactId) {

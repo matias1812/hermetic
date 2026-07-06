@@ -15,6 +15,7 @@ import { apiFetch } from './js/api.js';
 window.modalManager = modalManager;
 window.fetch = apiFetch;
 
+import './js/crypto_client.js';
 import { AuthValidator } from './js/auth.js';
 import {
     setupAuthEventListeners,
@@ -322,7 +323,13 @@ function initApp() {
 
     // Attach Tour listener (solo al crear cuenta)
     document.addEventListener('hermes:account_created', () => {
-        setTimeout(() => hermesTour.start(true), 1200);
+        const checkModal = setInterval(() => {
+            const modal = document.getElementById('onboarding-modal');
+            if (!modal || modal.classList.contains('hidden')) {
+                clearInterval(checkModal);
+                setTimeout(() => hermesTour.start(true), 300);
+            }
+        }, 500);
     });
 
     // Click outside any modal to close it

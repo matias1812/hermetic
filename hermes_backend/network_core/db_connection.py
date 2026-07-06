@@ -127,6 +127,8 @@ class DatabaseConnection:
             raise DatabaseError("Database connection failed")
 
     def register_user(self, id_hash: str, public_key_mlkem: str, public_key_sphincs: str):
+        # Nota arquitectónica: public_key_sphincs almacena Ed25519 PK (32B) para clientes web WASM
+        # y SPHINCS+ PK (32B) para clientes nativos post-cuánticos.
         existing = self.get_user(id_hash)
         conn = self._get_connection()
         try:

@@ -132,8 +132,13 @@ export function renderMessages() {
                         if (a !== audioEl) { a.pause(); a.currentTime = 0; }
                     });
                     document.querySelectorAll('[id^="play-btn-"]').forEach(b => { b.textContent = '▶'; });
-                    audioEl.play();
-                    playBtn.textContent = '⏸';
+                    audioEl.play().then(() => {
+                        playBtn.textContent = '⏸';
+                    }).catch(e => {
+                        console.error("Audio play error", e);
+                        showToast("Error al reproducir audio", true);
+                        playBtn.textContent = '▶';
+                    });
                 } else {
                     audioEl.pause();
                     playBtn.textContent = '▶';
@@ -263,7 +268,11 @@ export function renderMessages() {
                 if (eyeOpen) eyeOpen.classList.add('hidden');
                 if (eyeClosed) eyeClosed.classList.remove('hidden');
                 if (statusTxt) statusTxt.textContent = "Reproduciendo...";
-                audioEl.play();
+                audioEl.play().catch(e => {
+                    console.error("Audio play error", e);
+                    showToast("Error al reproducir audio", true);
+                    if (statusTxt) statusTxt.textContent = "Error al reproducir";
+                });
                 placeholder.style.pointerEvents = "none";
             });
             

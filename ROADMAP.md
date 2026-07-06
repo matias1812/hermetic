@@ -33,3 +33,24 @@
 - [ ] **Optimización**: Gestión de consumo de memoria en DOM y WebAssembly, limpieza progresiva.
 - [ ] **Auditoría de Pentesting (Post-v1.0)**: Una vez los flujos funcionales estén 100% terminados, se someterá el producto completo a pruebas de penetración dinámicas.
 - [ ] **Mes 5-6 (Despliegue Productivo)**: Empaquetado nativo (Tauri), reproducible builds y firmas Cosign.
+
+---
+
+## ?? Infraestructura y Seguridad (Core T�cnico)
+
+### Completado ?
+- X25519, Ed25519, Double Ratchet, ML-KEM
+- ZeroizeOnDrop, CSP, DOMSanitizer, Web Locks
+- Auto Backup, Continuous Fuzzing (Nightly CI)
+- Supply Chain CI/CD (GitHub Actions), SBOM (CycloneDX)
+
+### Integrado Experimentalmente ??
+- ML-DSA (FIPS 204)
+- Reproducible Builds (Infra Docker)
+
+### Pendiente ?
+- Hybrid Ratchet PQC Completo
+- Auditor�a Externa Acreditada
+- Firmado de artefactos (Sigstore / Cosign)
+- SLSA Level 3 compliance (Firma de procedencia)
+

@@ -191,11 +191,11 @@
       }
     </style>
 
-    <script type="module" crossorigin src="/assets/main-CACkHeAl.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/main-BGCU4xLV.css">
+    <script type="module" crossorigin src="/assets/main-Dfy5v9d0.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/main-B_Z4KY5p.css">
   </head>
 
-  <body class="crt-effect selection:bg-terminalGreen selection:text-black min-h-screen">
+  <body class="crt-effect selection:bg-terminalGreen selection:text-black min-h-[100dvh]">
 
     <!-- PANTALLA DE CARGA 3D FUTURISTA -->
     <div id="cyber-loader-screen">
@@ -254,20 +254,16 @@
       window.openSettingsModal = function(e) {
         if (e && e.preventDefault) e.preventDefault();
         console.log("[SettingsModal] Abriendo modal de configuración...");
-        const sm = document.getElementById('settings-modal');
-        if (!sm) {
-          console.error("[SettingsModal] ERROR: ¡No se encontró #settings-modal!");
-          return;
+        if (window.modalManager) {
+            window.modalManager.open('settings-modal');
+        } else {
+            const sm = document.getElementById('settings-modal');
+            if (sm) {
+                if (sm.parentElement !== document.body) document.body.appendChild(sm);
+                sm.classList.remove('hidden');
+                sm.classList.remove('opacity-0');
+            }
         }
-        if (sm.parentElement !== document.body) {
-          document.body.appendChild(sm);
-        }
-        sm.classList.remove('hidden');
-        sm.classList.remove('opacity-0');
-        sm.style.setProperty('display', 'flex', 'important');
-        sm.style.setProperty('opacity', '1', 'important');
-        sm.style.setProperty('visibility', 'visible', 'important');
-        sm.style.setProperty('z-index', '100000', 'important');
         try {
           if (window.setupSettingsData) window.setupSettingsData();
         } catch (err) {
@@ -276,10 +272,11 @@
       };
       window.closeSettingsModal = function(e) {
         if (e && e.preventDefault) e.preventDefault();
-        const sm = document.getElementById('settings-modal');
-        if (sm) {
-          sm.style.setProperty('display', 'none', 'important');
-          sm.classList.add('hidden');
+        if (window.modalManager) {
+            window.modalManager.closeActive();
+        } else {
+            const sm = document.getElementById('settings-modal');
+            if (sm) sm.classList.add('hidden');
         }
       };
     </script>
@@ -287,7 +284,7 @@
     <div class="wall-texture-3d"></div>
     <div class="scanline"></div>
 
-    <div id="app" class="w-full h-screen flex flex-col p-1 md:p-2">
+    <div id="app" class="w-full h-[100dvh] flex flex-col p-1 md:p-2">
 
 
 
@@ -662,30 +659,31 @@
             <div class="message-input-container">
                 <!-- Input de texto (visible por defecto) -->
                 <div id="text-input-area" class="input-area flex items-center gap-2">
-                    <button id="btn-emoji-toggle" class="bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 text-xs" title="Emojis">
+                    <button id="btn-emoji-toggle" class="bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 text-xs" title="Emojis" aria-label="Alternar emojis">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                     </button>
-                    <button id="btn-send-photo" class="bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 text-xs" title="Enviar foto">
+                    <button id="btn-send-photo" class="bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 text-xs" title="Enviar foto" aria-label="Enviar foto">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                     </button>
+                    </button>
                     <input type="file" id="photo-input" accept="image/*" class="hidden" />
-                    <button id="btn-view-once-toggle" class="w-8 h-8 rounded-full flex items-center justify-center border border-darkGrey text-gray-600 hover:border-orange-500 hover:text-orange-400 transition-colors shrink-0 text-xs" title="Vista unica (burn)">
+                    <button id="btn-view-once-toggle" class="w-8 h-8 rounded-full flex items-center justify-center border border-darkGrey text-gray-600 hover:border-orange-500 hover:text-orange-400 transition-colors shrink-0 text-xs" title="Vista unica (burn)" aria-label="Alternar modo de vista única">
                         <svg id="input-eye-open" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
                         <svg id="input-eye-closed" class="hidden w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 11 Q12 18 20 11 M12 14.5v3 M8 13.5l-2 2.5 M16 13.5l2 2.5" /></svg>
                     </button>
-                    <input type="text" id="chat-input" placeholder="Mensaje seguro..." disabled class="flex-grow bg-black border border-darkGrey rounded-full px-4 py-2 text-xs text-white focus:outline-none focus:border-terminalGreen placeholder-gray-700 disabled:opacity-40 font-sans min-w-0" />
+                    <input type="text" id="chat-input" placeholder="Mensaje seguro..." disabled class="flex-grow bg-black border border-darkGrey rounded-full px-4 py-2 text-xs text-white focus:outline-none focus:border-terminalGreen placeholder-gray-700 disabled:opacity-40 font-sans min-w-0" aria-label="Escribir mensaje" />
                     <!-- Botón de grabación de audio -->
-                    <button id="btn-record-audio" class="w-8 h-8 rounded-full flex items-center justify-center border border-red-500/30 text-red-400 hover:border-red-500 hover:bg-red-500/10 transition-colors shrink-0 text-sm" title="Grabar audio">
+                    <button id="btn-record-audio" class="w-8 h-8 rounded-full flex items-center justify-center border border-red-500/30 text-red-400 hover:border-red-500 hover:bg-red-500/10 transition-colors shrink-0 text-sm" title="Grabar audio" aria-label="Grabar mensaje de voz">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
                     </button>
-                    <button id="btn-send" disabled class="bg-white text-black hover:bg-gray-200 border border-white/40 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs disabled:opacity-40 transition-colors shadow shrink-0">
+                    <button id="btn-send" disabled class="bg-white text-black hover:bg-gray-200 border border-white/40 w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs disabled:opacity-40 transition-colors shadow shrink-0" aria-label="Enviar mensaje">
                         ▶
                     </button>
                 </div>
 
                 <!-- Área de grabación de audio (oculta por defecto) -->
                 <div id="audio-input-area" class="input-area hidden flex items-center gap-2 mt-2 w-full">
-                    <button id="btn-cancel-audio" class="w-8 h-8 rounded-full flex items-center justify-center border border-red-500 text-red-500 hover:bg-red-500/10 transition-colors shrink-0" title="Cancelar">
+                    <button id="btn-cancel-audio" class="w-8 h-8 rounded-full flex items-center justify-center border border-red-500 text-red-500 hover:bg-red-500/10 transition-colors shrink-0" title="Cancelar" aria-label="Cancelar grabación de audio">
                         ❌
                     </button>
                     <div class="audio-recording-bar flex flex-grow items-center gap-2 px-3 py-1 bg-red-950/20 border border-red-500/40 rounded-full">
@@ -718,7 +716,7 @@
     <div id="security-diagnostics" class="hidden absolute top-4 left-4 bg-darkSurface border border-darkGrey rounded-lg p-4 shadow-2xl z-50 text-[10px] font-mono w-72">
         <div class="flex justify-between items-center mb-3 pb-2 border-b border-darkGrey">
                   <h1 class="text-sm font-bold text-white tracking-widest">HERME<span class="text-terminalGreen">TIC</span></h1>
-            <button onclick="document.getElementById('security-diagnostics').classList.add('hidden')" class="text-gray-500 hover:text-white font-bold">[X]</button>
+            <button onclick="window.modalManager?.closeActive() || document.getElementById('security-diagnostics').classList.add('hidden')" class="text-gray-500 hover:text-white font-bold">[X]</button>
         </div>
         
         <div class="space-y-2">
@@ -759,7 +757,7 @@
 
       <div class="bg-darkSurface border border-darkGrey rounded-lg max-w-sm w-full p-6 shadow-2xl relative">
 
-        <button id="btn-close-add-modal" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <button id="btn-close-add-modal" onclick="window.modalManager?.closeActive()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
 
         <h3 class="text-xs font-bold text-white tracking-widest mb-1 uppercase font-mono">&gt; ENVIAR SOLICITUD DE CONTACTO</h3>
 
@@ -789,7 +787,7 @@
         <!-- Header fijo con la X en esquina superior derecha -->
         <div class="p-4 border-b border-terminalGreen/30 flex items-center justify-between bg-black/85 backdrop-blur-md sticky top-0 z-30 shrink-0">
           <h3 class="text-xs font-bold text-white tracking-widest uppercase font-mono">&gt; PERFIL Y CONFIGURACION</h3>
-          <button id="btn-close-settings-modal" onclick="window.closeSettingsModal(event)" class="text-gray-400 hover:text-terminalGreen text-xs font-bold font-mono px-2 py-1 bg-black/60 border border-darkGrey rounded hover:border-terminalGreen transition-colors">[X]</button>
+          <button id="btn-close-settings-modal" onclick="window.modalManager?.closeActive()" class="text-gray-400 hover:text-terminalGreen text-xs font-bold font-mono px-2 py-1 bg-black/60 border border-darkGrey rounded hover:border-terminalGreen transition-colors">[X]</button>
         </div>
 
         <!-- Contenedor con scroll vertical -->
@@ -956,7 +954,7 @@
 
           <div class="p-5 space-y-2.5">
 
-            <button id="btn-admin-panel" onclick="window.closeSettingsModal(); setTimeout(() => { const am=document.getElementById('admin-panel-modal'); if(am){ if(am.parentElement!==document.body) document.body.appendChild(am); am.style.setProperty('z-index','2147483647','important'); am.style.setProperty('display', 'flex', 'important'); am.classList.remove('hidden'); setTimeout(()=>am.classList.remove('opacity-0'),10); } if(window.adminPanel) window.adminPanel.fetchStats(); }, 100);" class="w-full text-left px-3 py-2.5 text-yellow-400 hover:bg-yellow-950/20 transition-colors rounded border border-yellow-500/40 text-[10px] font-mono font-bold flex items-center gap-2 hidden">
+            <button id="btn-admin-panel" onclick="window.modalManager?.open('admin-panel-modal'); if(window.adminPanel) window.adminPanel.fetchStats();" class="w-full text-left px-3 py-2.5 text-yellow-400 hover:bg-yellow-950/20 transition-colors rounded border border-yellow-500/40 text-[10px] font-mono font-bold flex items-center gap-2 hidden">
 
               <span>👑</span> SALUD CRIPTOGRÁFICA Y ADMIN
 
@@ -968,13 +966,13 @@
 
             </button>
 
-            <button id="btn-backup-settings" onclick="window.closeSettingsModal(); setTimeout(() => { const bm=document.getElementById('backup-modal'); if(bm){ if(bm.parentElement!==document.body) document.body.appendChild(bm); bm.style.setProperty('z-index','2147483647','important'); bm.style.setProperty('display', 'flex', 'important'); bm.classList.remove('hidden'); setTimeout(()=>bm.classList.remove('opacity-0'),10); } }, 100);" class="w-full text-left px-3 py-2.5 text-blue-300 hover:bg-black/40 transition-colors rounded border border-darkGrey/40 text-[10px] font-mono font-bold flex items-center gap-2">
+            <button id="btn-backup-settings" onclick="window.modalManager?.open('backup-modal');" class="w-full text-left px-3 py-2.5 text-blue-300 hover:bg-black/40 transition-colors rounded border border-darkGrey/40 text-[10px] font-mono font-bold flex items-center gap-2">
 
               <span>💾</span> GESTIÓN DE BACKUPS Y RECUPERACIÓN
 
             </button>
 
-            <button onclick="window.closeSettingsModal(); localStorage.removeItem('hermes_tour_completed'); setTimeout(()=>window.hermesTour?.start(true),300);" class="w-full text-left px-3 py-2.5 text-cyan-400 hover:bg-cyan-950/20 transition-colors rounded border border-cyan-500/30 text-[10px] font-mono font-bold flex items-center gap-2">
+            <button onclick="window.modalManager?.closeActive(); localStorage.removeItem('hermes_tour_completed'); setTimeout(()=>window.hermesTour?.start(true),300);" class="w-full text-left px-3 py-2.5 text-cyan-400 hover:bg-cyan-950/20 transition-colors rounded border border-cyan-500/30 text-[10px] font-mono font-bold flex items-center gap-2">
 
               <span>📖</span> VER TOUR INTERACTIVO
 
@@ -1002,7 +1000,7 @@
 
       <div class="bg-darkSurface border border-darkGrey rounded-lg max-w-2xl w-full p-5 shadow-2xl relative flex flex-col max-h-[90vh] overflow-hidden">
 
-        <button onclick="closeInspector()" class="absolute top-4 right-4 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <button onclick="window.modalManager?.closeActive()" class="absolute top-4 right-4 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
 
         <h3 class="text-xs font-bold text-white tracking-widest mb-3 uppercase font-mono">&gt; FORENSIC_DATA_AUDIT</h3>
 
@@ -1064,7 +1062,7 @@
 
       <div class="bg-darkSurface border border-red-500/30 rounded-lg max-w-sm w-full p-5 shadow-2xl relative space-y-4">
 
-        <button id="btn-close-disable-modal" class="absolute top-4 right-4 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <button id="btn-close-disable-modal" onclick="window.modalManager?.closeActive()" class="absolute top-4 right-4 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
 
         <h3 class="text-xs font-bold text-red-500 tracking-widest uppercase font-mono">&gt; DESHABILITAR CUENTA PERMANENTE</h3>
 
@@ -1101,7 +1099,7 @@
 
         <img id="view-once-img" src="" alt="Vista unica" class="max-w-full max-h-[70vh] rounded border border-orange-500/30 block select-none" draggable="false" />
 
-        <button id="btn-close-view-once" class="bg-red-900/40 hover:bg-red-600 border border-red-500 text-red-300 font-bold py-2 px-6 rounded text-[10px] font-mono tracking-widest transition-all">[ CERRAR Y DESTRUIR ]</button>
+        <button id="btn-close-view-once" onclick="window.modalManager?.closeActive()" class="bg-red-900/40 hover:bg-red-600 border border-red-500 text-red-300 font-bold py-2 px-6 rounded text-[10px] font-mono tracking-widest transition-all">[ CERRAR Y DESTRUIR ]</button>
 
       </div>
 
@@ -1113,7 +1111,7 @@
     <!-- MODAL: CREATE GROUP -->
 <div id="create-group-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
   <div class="bg-darkSurface border border-purple-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
-    <button onclick="document.getElementById('create-group-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+    <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
     <h3 class="text-xs font-bold text-purple-400 tracking-widest mb-1 uppercase font-mono">&gt; CREAR GRUPO</h3>
     <p class="text-[9px] text-gray-500 font-mono mb-4">Crea un canal seguro grupal de 3+ usuarios.</p>
     <div class="space-y-4">
@@ -1135,7 +1133,7 @@
 <!-- MODAL: EDIT GROUP -->
     <div id="edit-group-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
       <div class="bg-darkSurface border border-purple-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
-        <button onclick="document.getElementById('edit-group-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
         <h3 class="text-xs font-bold text-purple-400 tracking-widest mb-1 uppercase font-mono">&gt; EDITAR GRUPO</h3>
         <p class="text-[9px] text-gray-500 font-mono mb-4">Modificar metadatos del canal grupal.</p>
         <div class="space-y-4">
@@ -1151,7 +1149,7 @@
     <!-- MODAL: ADD MEMBER -->
     <div id="add-member-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 hidden opacity-0 transition-opacity duration-300">
       <div class="bg-darkSurface border border-purple-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono">
-        <button onclick="document.getElementById('add-member-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
         <h3 class="text-xs font-bold text-purple-400 tracking-widest mb-1 uppercase font-mono">&gt; AGREGAR MIEMBRO</h3>
         <p class="text-[9px] text-gray-500 font-mono mb-4">Invitar contacto aceptado al canal grupal.</p>
         <div class="space-y-4">
@@ -1169,7 +1167,7 @@
     <!-- MODAL: BACKUP & RECOVERY -->
     <div id="backup-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-[2147483647] hidden opacity-0 transition-opacity duration-300">
       <div class="bg-darkSurface border border-blue-500/30 rounded-lg max-w-sm w-full p-6 shadow-2xl relative font-mono max-h-[90vh] overflow-y-auto">
-        <button onclick="const bm=document.getElementById('backup-modal'); bm.classList.add('opacity-0'); setTimeout(()=>bm.classList.add('hidden'),300);" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
+        <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold font-mono">[X]</button>
         <h3 class="text-xs font-bold text-blue-400 tracking-widest mb-1 uppercase font-mono">&gt; BACKUPS Y RECUPERACIÓN MAESTRA</h3>
         <p class="text-[9px] text-gray-500 font-mono mb-4">Crea, restaura o fusiona copias de seguridad cifradas multi-dispositivo.</p>
         
@@ -1224,7 +1222,7 @@
   <!-- MODAL: ONBOARDING -->
 <div id="onboarding-modal" class="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-[2147483647] hidden opacity-0 transition-opacity duration-300">
   <div class="bg-darkSurface border border-terminalGreen/30 rounded-lg max-w-md w-full p-6 shadow-2xl relative font-mono text-[10px] space-y-4">
-    <button onclick="document.getElementById('onboarding-modal').classList.add('hidden')" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold">[X]</button>
+    <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-3 text-gray-500 hover:text-white text-xs font-bold">[X]</button>
     
     <h3 class="text-xs font-bold text-terminalGreen tracking-widest uppercase">&gt; ONBOARDING_SYSTEM v7.0</h3>
     
@@ -1246,14 +1244,14 @@
       </div>
     </div>
     
-    <button onclick="document.getElementById('onboarding-modal').classList.add('hidden')" class="w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-colors">[ COMENZAR A CHATEAR ]</button>
+    <button onclick="window.modalManager?.closeActive()" class="w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-colors">[ COMENZAR A CHATEAR ]</button>
   </div>
 </div>
 
   <!-- MODAL: ADMIN & CRYPTO HEALTH DASHBOARD -->
 <div id="admin-panel-modal" class="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center p-4 z-[2147483647] hidden opacity-0 transition-opacity duration-300">
   <div class="bg-gradient-to-b from-[#0f1017] to-[#14161f] border border-terminalGreen/50 rounded-xl max-w-4xl w-full p-5 shadow-[0_0_40px_rgba(0,255,102,0.2)] relative font-mono text-xs flex flex-col justify-between">
-    <button onclick="const m=document.getElementById('admin-panel-modal'); m.classList.add('opacity-0'); setTimeout(()=>m.classList.add('hidden'),300);" class="absolute top-3 right-4 text-gray-400 hover:text-terminalGreen text-lg font-extralight transition-all transform hover:scale-110 z-20" title="Cerrar Panel">✕</button>
+    <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-4 text-gray-400 hover:text-terminalGreen text-lg font-extralight transition-all transform hover:scale-110 z-20" title="Cerrar Panel">✕</button>
     <div id="admin-panel-container" class="w-full">
       <!-- Dynamic content rendered by admin_panel.js -->
     </div>

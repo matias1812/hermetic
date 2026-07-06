@@ -1,5 +1,5 @@
 import { hermesBridge } from './crypto_wasm_bridge.js';
-
+import { RealDoubleRatchet } from './double_ratchet.js';
 import { CryptoClient } from './crypto_client.js';
 import { state } from './state.js';
 import { PayloadValidator } from './security/payload_validator.js';
@@ -16,6 +16,61 @@ export class SyncManager {
         this.websocket = null;
         this.syncInterval = null;
         this.sphincsKeysCache = {}; // Cache for SPHINCS+ public keys
+        this.ratchets = {}; // Active RealDoubleRatchet instances per contact
+    }
+
+    async getOrInitRatchet(contactId) {
+        if (!this.ratchets) this.ratchets = {};
+        if (this.ratchets[contactId] && this.ratchets[contactId].isWasmMode) {
+            return this.ratchets[contactId];
+        }
+        const sharedKeyHex = this.contacts.sharedKeys[contactId];
+        if (!sharedKeyHex || sharedKeyHex === "0000000000000000000000000000000000000000000000000000000000000000") {
+            return null;
+        }
+
+        let receiverKyberPk = null;
+        try {
+            const receiverHash = await CryptoClient.computeUserHash(contactId);
+            const keysRes = await fetch(`/api/user/${receiverHash}`);
+            if (keysRes.ok) {
+                const keys = await keysRes.json();
+                receiverKyberPk = keys.kyber_pk_hex;
+            }
+        } catch (e) {
+            console.warn("Could not fetch remote key for ratchet init:", e);
+        }
+        if (!receiverKyberPk) return null;
+
+        const userKeys = await this.getOrRecoverUserKeys();
+        if (!userKeys || !userKeys.kyber_sk) return null;
+
+        try {
+            const ratchet = new RealDoubleRatchet(contactId);
+            const isAlice = this.currentUserAlias < contactId;
+            await ratchet.init(userKeys.kyber_sk, receiverKyberPk, isAlice, sharedKeyHex);
+            this.ratchets[contactId] = ratchet;
+            return ratchet;
+        } catch (e) {
+            console.warn(`[DoubleRatchet] Failed to initialize for ${contactId}:`, e);
+            return null;
+        }
+    }
+
+    async _saveRatchetStateToVault(contactId, ratchet) {
+        if (!this.storage || !ratchet) return;
+        try {
+            await this.storage.save(`ratchet_state_${contactId}`, {
+                contactId: contactId,
+                isWasmMode: ratchet.isWasmMode,
+                updatedAt: Date.now()
+            });
+        } catch (e) {
+            console.error(`[SyncManager] CRITICAL: Could not persist ratchet state for ${contactId}:`, e);
+            const err = new Error(`Persistencia transaccional fallida para ${contactId}: el estado del ratchet no pudo escribirse en disco.`);
+            err.name = "RatchetPersistenceError";
+            throw err;
+        }
     }
 
     async getOrRecoverUserKeys() {
@@ -332,13 +387,39 @@ export class SyncManager {
                 );
             } else {
                 // DM: retrieve sender sphincs pk and shared key
-                const sharedKey = this.contacts.sharedKeys[senderId];
-                decryptedPlaintext = await CryptoClient.decryptPayload(
-                    envelope,
-                    userKeys.kyber_sk,
-                    senderSphincsPk,
-                    sharedKey || "0000000000000000000000000000000000000000000000000000000000000000"
-                );
+                if (envelope.version === "v2" && envelope.ratchet_header) {
+                    try {
+                        const ratchet = await this.getOrInitRatchet(senderId);
+                        if (ratchet) {
+                            const ctBytes = new Uint8Array(envelope.wrapped_otp_key.match(/.{1,2}/g)?.map(b => parseInt(b, 16)) || []);
+                            const ivBytes = new Uint8Array((envelope.aes_nonce || "").match(/.{1,2}/g)?.map(b => parseInt(b, 16)) || []);
+                            const headerCipherBytes = new Uint8Array((envelope.ratchet_header.ciphertext || "").match(/.{1,2}/g)?.map(b => parseInt(b, 16)) || []);
+                            const headerIvBytes = new Uint8Array((envelope.ratchet_header.iv || "").match(/.{1,2}/g)?.map(b => parseInt(b, 16)) || []);
+                            
+                            decryptedPlaintext = await ratchet.decryptMessage({
+                                header: { ciphertext: headerCipherBytes, iv: headerIvBytes },
+                                ciphertext: ctBytes,
+                                iv: ivBytes,
+                                message_number: envelope.ratchet_header.message_number
+                            });
+                            await this._saveRatchetStateToVault(senderId, ratchet);
+                        }
+                    } catch (errV2) {
+                        if (errV2 && errV2.name === "RatchetPersistenceError") {
+                            throw errV2;
+                        }
+                        console.warn(`[DoubleRatchet] v2 decryption failed for ${senderId}, falling back to v1:`, errV2);
+                    }
+                }
+                if (!decryptedPlaintext) {
+                    const sharedKey = this.contacts.sharedKeys[senderId];
+                    decryptedPlaintext = await CryptoClient.decryptPayload(
+                        envelope,
+                        userKeys.kyber_sk,
+                        senderSphincsPk,
+                        sharedKey || "0000000000000000000000000000000000000000000000000000000000000000"
+                    );
+                }
             }
 
             if (!decryptedPlaintext) return;
@@ -694,14 +775,54 @@ export class SyncManager {
 
         // Encrypt the inner payload
         const plaintext = JSON.stringify(payloadObj);
-        const envelope = await CryptoClient.encryptPayload(
-            plaintext,
-            receiverKyberPk,
-            userKeys.sphincs_sk,
-            sessionKeyHex,
-            senderId,
-            receiverId
-        );
+        let envelope = null;
+
+        if (!isGroup && payloadObj.type !== "contact_accept" && payloadObj.type !== "contact_request" && payloadObj.type !== "oob_verify") {
+            try {
+                const ratchet = await this.getOrInitRatchet(receiverId);
+                if (ratchet) {
+                    const ratchetRes = await ratchet.encryptMessage(plaintext);
+                    const ctHex = Array.from(new Uint8Array(ratchetRes.ciphertext)).map(b => b.toString(16).padStart(2, '0')).join('');
+                    const ivHex = Array.from(new Uint8Array(ratchetRes.iv)).map(b => b.toString(16).padStart(2, '0')).join('');
+                    const headerCipherHex = Array.from(new Uint8Array(ratchetRes.header.ciphertext)).map(b => b.toString(16).padStart(2, '0')).join('');
+                    const headerIvHex = Array.from(new Uint8Array(ratchetRes.header.iv)).map(b => b.toString(16).padStart(2, '0')).join('');
+                    const timestamp = Math.floor(Date.now() / 1000);
+                    const signatureHex = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
+
+                    envelope = {
+                        version: "v2",
+                        ratchet_header: {
+                            ciphertext: headerCipherHex,
+                            iv: headerIvHex,
+                            message_number: ratchetRes.message_number
+                        },
+                        ciphertext_kem: "",
+                        wrapped_otp_key: ctHex,
+                        stego_container: "",
+                        audio_spectrum: null,
+                        signature: signatureHex,
+                        timestamp: timestamp,
+                        aes_nonce: ivHex,
+                        sender_id: senderId || "",
+                        receiver_id: receiverId || ""
+                    };
+                    await this._saveRatchetStateToVault(receiverId, ratchet);
+                }
+            } catch (errRatchet) {
+                console.warn(`[DoubleRatchet] v2 encryption failed for ${receiverId}, falling back to v1:`, errRatchet);
+            }
+        }
+
+        if (!envelope) {
+            envelope = await CryptoClient.encryptPayload(
+                plaintext,
+                receiverKyberPk,
+                userKeys.sphincs_sk,
+                sessionKeyHex,
+                senderId,
+                receiverId
+            );
+        }
 
         // Convert envelope to hex blob
         const envelopeHex = stringToHex(JSON.stringify(envelope));

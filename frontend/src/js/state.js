@@ -37,8 +37,14 @@ export const state = {
     recoveryKey: null,          // CryptoKey derivada de la mnemónica (durante la sesión)
 };
 
+let lastTs = 0;
 export function intTimestamp() {
-    return Math.floor(Date.now() / 1000);
+    let current = Math.floor(Date.now() / 1000);
+    if (current <= lastTs) {
+        current = lastTs + 1;
+    }
+    lastTs = current;
+    return current;
 }
 
 export function showToast(message, isErrorOrType = false) {

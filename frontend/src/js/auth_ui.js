@@ -393,8 +393,9 @@ export async function doLoginTransition(alias, password) {
         // Transition Views
         document.getElementById("view-auth").classList.add("hidden");
         document.getElementById("view-chat").classList.remove("hidden");
-        document.getElementById("current-user-name").textContent = `@${state.currentUser}`;
-        document.getElementById("my-avatar").textContent = state.currentUser.substring(0, 2).toUpperCase();
+        const displayAliasLogin = localStorage.getItem("hermes_alias_override_" + state.currentUser) || state.currentUser;
+        document.getElementById("current-user-name").textContent = `@${displayAliasLogin}`;
+        document.getElementById("my-avatar").textContent = displayAliasLogin.substring(0, 2).toUpperCase();
         if (window.hermesTheme) window.hermesTheme.onLogin(state.currentUser);
 
         // Start Synchronization
@@ -797,6 +798,13 @@ export function setupSettingsDropdown() {
                     }
                     if (usernameEl) usernameEl.textContent = `@${val}`;
                     if (avatarEl) avatarEl.textContent = val.substring(0, 2).toUpperCase();
+                    
+                    showToast("Nombre / Alias actualizado correctamente.", false);
+                    
+                    const mainUserEl = document.getElementById("current-user-name");
+                    const mainAvatarEl = document.getElementById("my-avatar");
+                    if (mainUserEl) mainUserEl.textContent = `@${val}`;
+                    if (mainAvatarEl) mainAvatarEl.textContent = val.substring(0, 2).toUpperCase();
                     inputNewAlias.value = "";
                     showToast(`✅ Alias visual actualizado a @${val}`);
                 };
@@ -1172,10 +1180,8 @@ export function setupAuthEventListeners() {
                 await state.groups.save(state.storage);
                 await state.chats.save(state.storage);
 
-                const onboardingModal = document.getElementById("onboarding-modal");
-                if (onboardingModal) {
-                    onboardingModal.classList.remove("hidden");
-                    setTimeout(() => onboardingModal.classList.remove("opacity-0"), 10);
+                if (window.modalManager) {
+                    window.modalManager.open('onboarding-modal');
                 }
 
                 document.dispatchEvent(new Event('hermes:account_created'));

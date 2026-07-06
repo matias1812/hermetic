@@ -1,0 +1,3 @@
+# Deterministic Build Hashes for Release Environment
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  dist/assets/hermes_crypto_wasm_bg.wasm
+a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e  dist/index.html

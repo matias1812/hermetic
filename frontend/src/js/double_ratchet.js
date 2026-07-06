@@ -13,7 +13,7 @@ export class RealDoubleRatchet {
         this.isWasmMode = false;
     }
     
-    async init(skBytes, pkBytes, isAlice) {
+    async init(skBytes, pkBytes, isAlice, sharedSecretOpt = null) {
         if (!hermesBridge.ready) {
             await hermesBridge.init();
         }
@@ -21,14 +21,29 @@ export class RealDoubleRatchet {
         const remotePk = pkBytes instanceof ArrayBuffer ? new Uint8Array(pkBytes) : (pkBytes instanceof Uint8Array ? pkBytes : new Uint8Array(pkBytes));
         const localSk = skBytes ? (skBytes instanceof ArrayBuffer ? new Uint8Array(skBytes) : (skBytes instanceof Uint8Array ? skBytes : new Uint8Array(skBytes))) : null;
         
+        let sharedSecretBytes = null;
+        if (sharedSecretOpt) {
+            if (typeof sharedSecretOpt === 'string') {
+                const cleanHex = sharedSecretOpt.replace(/[^0-9a-fA-F]/g, '');
+                if (cleanHex.length === 64) {
+                    sharedSecretBytes = new Uint8Array(cleanHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                }
+            } else if (sharedSecretOpt instanceof ArrayBuffer) {
+                sharedSecretBytes = new Uint8Array(sharedSecretOpt);
+            } else if (sharedSecretOpt instanceof Uint8Array) {
+                sharedSecretBytes = new Uint8Array(sharedSecretOpt);
+            }
+        }
+        
         // Delegar absolutamente todo a Rust: no hay deriveDH en JS, Rust genera claves epímeras si es necesario.
-        const ok = hermesBridge.createSession(this.contactId, isAlice, remotePk, null, localSk, null);
+        const ok = hermesBridge.createSession(this.contactId, isAlice, remotePk, sharedSecretBytes, localSk, null);
         if (!ok) {
             throw new Error("Failed to create DoubleRatchet session in HermesCore");
         }
         this.isWasmMode = true;
 
         if (localSk) MemorySanitizer.zeroizeArray(localSk);
+        if (sharedSecretBytes) MemorySanitizer.zeroizeArray(sharedSecretBytes);
     }
 
     async encryptMessage(plaintext, aad = '') {
