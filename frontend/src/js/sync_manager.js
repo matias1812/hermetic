@@ -941,8 +941,14 @@ export class SyncManager {
 }
 
 // Helpers
+let _lastTs = 0;
 function intTimestamp() {
-    return Math.floor(Date.now() / 1000);
+    let current = Math.floor(Date.now() / 1000);
+    if (current <= _lastTs) {
+        current = _lastTs + 1;
+    }
+    _lastTs = current;
+    return current;
 }
 
 function logger(msg) {

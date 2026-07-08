@@ -42,7 +42,10 @@ export class CompleteRecoverySystem {
         this.recoveryKey = key;
         
         // 3. Mostrar frase al usuario
-        this.showRecoveryPhrase(mnemonic);
+        await this.showRecoveryPhrase(mnemonic);
+        
+        // Save verification payload so verifyMnemonic works later
+        localStorage.setItem('hermes_recovery_verification', JSON.stringify(verification));
         
         // 4. Iniciar auto-backup
         this.startAutoBackup();
@@ -50,12 +53,12 @@ export class CompleteRecoverySystem {
         return { mnemonic, verification };
     }
     
-    showRecoveryPhrase(mnemonic) {
+    async showRecoveryPhrase(mnemonic) {
         console.log("====== RECOVERY PHRASE ======");
         console.log(mnemonic);
         console.log("=============================");
         if (window.modalManager) {
-            window.modalManager.custom({
+            return window.modalManager.custom({
                 title: '[ ⚠️ GUARDA ESTA FRASE DE RECUPERACIÓN ]',
                 body: `<p>Anota estas 12 palabras en orden. Es la ÚNICA forma de recuperar tu cuenta.</p>
                        <div class="bg-gray-900 p-4 rounded text-terminal text-center my-4 select-all text-xl">${mnemonic}</div>`,

@@ -86,7 +86,7 @@ export class BackupManager {
         await this._registerBackup(metadata);
 
         // 6. Descargar archivo
-        this.downloadBackupFile(encrypted);
+        await this.downloadBackupFile(encrypted);
 
         return {
             success:  true,
@@ -237,16 +237,42 @@ export class BackupManager {
         return hermesBridge.decryptBackupData(encrypted, password);
     }
 
-    downloadBackupFile(data) {
+    async downloadBackupFile(data) {
         /**
-         * Descarga archivo .hermes
+         * Descarga archivo .hermes usando File System Access API si está disponible (para prompt "Save As")
          */
+        const defaultName = `hermes_backup_${Date.now()}.hermes`;
+        try {
+            if (window.showSaveFilePicker) {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: defaultName,
+                    types: [{
+                        description: 'Hermes Backup File',
+                        accept: {'application/octet-stream': ['.hermes']}
+                    }]
+                });
+                const writable = await handle.createWritable();
+                await writable.write(data);
+                await writable.close();
+                return;
+            }
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                console.error("[BackupManager] File System Access API failed, falling back to blob download", err);
+            } else {
+                return; // User cancelled the save dialog
+            }
+        }
+
+        // Fallback for browsers that don't support showSaveFilePicker
         const blob = new Blob([data], { type: 'application/octet-stream' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
         a.href     = url;
-        a.download = `hermes_backup_${Date.now()}.hermes`;
+        a.download = defaultName;
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
 

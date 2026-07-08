@@ -285,6 +285,7 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
             
             // Only send one typing indicator every 3 seconds max
             if (now - lastTypingTime > 3000) {
+                if (window.state && window.state.privacySettings && window.state.privacySettings.typingIndicators === false) return;
                 lastTypingTime = now;
                 try {
                     const payload = {

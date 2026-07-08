@@ -838,7 +838,8 @@ export function setupSettingsDropdown() {
             const mkBadge = document.getElementById('mk-status-badge');
             const mkBtnText = document.getElementById('mk-btn-text');
             const btnConfigMK = document.getElementById('btn-configure-mk');
-            const hasMK = localStorage.getItem('hermes_master_key_set') === 'true' || localStorage.getItem('hermes_recovery_salt');
+            const currentUserId = state.storage ? state.storage.getUserId() : '';
+            const hasMK = localStorage.getItem('hermes_master_key_set') === 'true' || localStorage.getItem('hermes_recovery_salt_' + currentUserId) || localStorage.getItem('hermes_recovery_salt');
             if (mkBadge) {
                 if (hasMK) {
                     mkBadge.textContent = 'ACTIVA';
@@ -886,13 +887,28 @@ export function setupSettingsDropdown() {
                 if (selectTTL && window.privacySettings) {
                     window.privacySettings.set('pendingMessageTTL', parseInt(selectTTL.value));
                 }
+                if (state.sync && state.sync.websocket) {
+                    state.sync.websocket.close(); // Force reconnect to broadcast new online status
+                }
                 showToast("Configuración de privacidad guardada.");
             };
             
-            if (toggleRead) toggleRead.onchange = updatePrivacy;
-            if (toggleTyping) toggleTyping.onchange = updatePrivacy;
-            if (toggleOnline) toggleOnline.onchange = updatePrivacy;
-            if (selectTTL) selectTTL.onchange = updatePrivacy;
+            if (toggleRead) {
+                toggleRead.removeEventListener('change', updatePrivacy);
+                toggleRead.addEventListener('change', updatePrivacy);
+            }
+            if (toggleTyping) {
+                toggleTyping.removeEventListener('change', updatePrivacy);
+                toggleTyping.addEventListener('change', updatePrivacy);
+            }
+            if (toggleOnline) {
+                toggleOnline.removeEventListener('change', updatePrivacy);
+                toggleOnline.addEventListener('change', updatePrivacy);
+            }
+            if (selectTTL) {
+                selectTTL.removeEventListener('change', updatePrivacy);
+                selectTTL.addEventListener('change', updatePrivacy);
+            }
         } catch (err) {
             console.error("Error al poblar datos del modal de configuración:", err);
         }
@@ -900,7 +916,11 @@ export function setupSettingsDropdown() {
 
     if (btnProfile) {
         btnProfile.onclick = (e) => {
-            if (window.modalManager) window.modalManager.open('settings-modal');
+            if (window.openSettingsModal) {
+                window.openSettingsModal(e);
+            } else if (window.modalManager) {
+                window.modalManager.open('settings-modal');
+            }
         };
     }
 

@@ -256,6 +256,9 @@ export function renderMessages() {
             
             const audioEl = document.createElement('audio');
             audioEl.src = msg.plaintext;
+            audioEl.className = 'hidden';
+            audioEl.preload = 'auto';
+            placeholder.appendChild(audioEl);
             
             placeholder.addEventListener("click", () => {
                 if (isSelf) {
