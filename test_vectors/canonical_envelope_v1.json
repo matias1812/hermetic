@@ -21,5 +21,7 @@
         "sha3_256_hex": "9e99d2787691e210159581f11b24fd1a67b9775a6723dfea96b0773dde739379"
       }
     }
-  ]
+  ],
+  "purpose": "canonical-serialization-only",
+  "cryptographically_valid": false
 }

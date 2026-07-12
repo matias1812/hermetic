@@ -22,6 +22,9 @@ class AuthenticationTagError(InvalidEnvelopeError):
 class InvalidKemCiphertextError(InvalidEnvelopeError):
     pass
 
+class UnsupportedAlgorithmError(InvalidEnvelopeError):
+    pass
+
 class TransientCryptoBackendError(RuntimeError):
     pass
 
@@ -31,15 +34,19 @@ import os
 
 try:
     import hermes_ffi
-    NATIVE_AVAILABLE = True
-    logger.info(
-        "\n==================================================\n"
-        "Execution mode\n"
-        "==================================================\n"
-        "Rust FFI: Available & Active\n"
-        "Engine: Native Rust/WASM Core\n"
-        "=================================================="
-    )
+    if hasattr(hermes_ffi, 'generate_keys_native'):
+        NATIVE_AVAILABLE = True
+        logger.info(
+            "\n==================================================\n"
+            "Execution mode\n"
+            "==================================================\n"
+            "Rust FFI: Available & Active\n"
+            "Engine: Native Rust/WASM Core\n"
+            "=================================================="
+        )
+    else:
+        NATIVE_AVAILABLE = False
+        logger.warning("Found hermes_ffi but missing generate_keys_native. Treating as unavailable.")
 except ImportError:
     NATIVE_AVAILABLE = False
     env_mode = os.environ.get("HERMES_ENV", os.environ.get("HERMES_MODE", "development")).lower()
@@ -236,6 +243,12 @@ class HermesNativeCore:
                 sender_id, receiver_id, timestamp_int,
                 b"", encrypted['nonce'], encrypted['ciphertext']
             )
+            
+            # Pack algorithms for the envelope
+            kem_alg_out = "None"
+            aead_alg_out = "AES-256-GCM"
+            sig_alg_out = "SLH-DSA-SHA2-128f"
+            
             signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
             
             disperser = CSPRNGDisperser(session_key)
@@ -273,6 +286,10 @@ class HermesNativeCore:
             else:
                 signature = encrypted['signature']
                 
+            kem_alg_out = "ML-KEM-1024"
+            aead_alg_out = "AES-256-GCM"
+            sig_alg_out = "SLH-DSA-SHA2-128f"
+                
             disperser = CSPRNGDisperser(session_key)
             whitened_payload = disperser.whiten_data(bytearray(encrypted['encrypted_message']))
             
@@ -294,7 +311,10 @@ class HermesNativeCore:
             "timestamp": timestamp_int,
             "aes_nonce": aes_nonce_hex,
             "sender_id": sender_id,
-            "receiver_id": receiver_id
+            "receiver_id": receiver_id,
+            "kem_algorithm": kem_alg_out,
+            "aead_algorithm": aead_alg_out,
+            "signature_algorithm": sig_alg_out
         }
 
     @staticmethod
@@ -313,6 +333,20 @@ class HermesNativeCore:
         sender_id   = package.get('sender_id', '')
         receiver_id = package.get('receiver_id', '')
         timestamp_int = int(package.get('timestamp', 0))
+        
+        # 0. Policy Validation
+        EXPECTED_KEM = "ML-KEM-1024" if package.get('ciphertext_kem') else "None"
+        kem_alg = package.get('kem_algorithm', EXPECTED_KEM)
+        if kem_alg != EXPECTED_KEM:
+            raise UnsupportedAlgorithmError(f"Unsupported KEM algorithm: {kem_alg}")
+            
+        aead_alg = package.get('aead_algorithm', "AES-256-GCM")
+        if aead_alg != "AES-256-GCM":
+            raise UnsupportedAlgorithmError(f"Unsupported AEAD algorithm: {aead_alg}")
+            
+        sig_alg = package.get('signature_algorithm', "SLH-DSA-SHA2-128f")
+        if sig_alg != "SLH-DSA-SHA2-128f":
+            raise UnsupportedAlgorithmError(f"Unsupported signature algorithm: {sig_alg}")
         
         # 2. Identidad: Verificación de Spoofing
         if not isinstance(expected_sender_id, str) or not expected_sender_id:
@@ -349,7 +383,7 @@ class HermesNativeCore:
         # 3. Firma: Validación SPHINCS+ usando canonical_signed_payload
         ciphertext_kem_bytes = bytes.fromhex(ciphertext_kem_hex) if ciphertext_kem_hex else b""
         message_to_verify = HermesNativeCore.canonical_signed_payload(
-            "ML-KEM-1024" if ciphertext_kem_bytes else "None", "AES-256-GCM", "SLH-DSA-SHA2-128f",
+            kem_alg, aead_alg, sig_alg,
             sender_id, receiver_id, timestamp_int,
             ciphertext_kem_bytes, aes_nonce_bytes, bytes(encrypted_message)
         )
