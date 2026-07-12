@@ -3,10 +3,32 @@ import hashlib
 import time
 import uuid
 import logging
+import ctypes
+import os
+import sys
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
+
+# Carga dinámica de la librería Rust
+lib_path = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
+    "hermes_ip_middleware", 
+    "target", 
+    "release",
+    "hermes_ip_middleware.dll" if sys.platform == "win32" else "libhermes_ip_middleware.so"
+)
+
+try:
+    ip_lib = ctypes.CDLL(lib_path)
+    ip_lib.anonymize_ip.argtypes = [ctypes.c_char_p]
+    ip_lib.anonymize_ip.restype = ctypes.POINTER(ctypes.c_char)
+    ip_lib.free_anonymized_ip.argtypes = [ctypes.POINTER(ctypes.c_char)]
+    ip_lib.free_anonymized_ip.restype = None
+except Exception as e:
+    logger.error(f"No se pudo cargar la librería Rust de IP: {e}")
+    ip_lib = None
 
 class TotalPrivacyMiddleware(BaseHTTPMiddleware):
     """
@@ -20,10 +42,19 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
     5. NO generar logs de acceso
     6. Solo contador ciego para rate limiting
     """
+
+    def __init__(self, app):
+        super().__init__(app)
+        if os.getenv("TESTING_MODE") == "1":
+            logger.warning("==================================================")
+            logger.warning("WARNING: TESTING_MODE IS ACTIVE. X-Test-IP ENABLED")
+            logger.warning("==================================================")
     
     async def dispatch(self, request: Request, call_next):
         # 1. Anonimizar IP INMEDIATAMENTE
         original_ip = request.client.host if request.client else "unknown"
+        if os.getenv("TESTING_MODE") == "1" and original_ip in ("127.0.0.1", "::1", "localhost"):
+            original_ip = request.headers.get("X-Test-IP", original_ip)
         anonymized_ip = self._anonymize_ip_completely(original_ip)
         
         # 2. Generar request ID ciego (sin información)
@@ -54,7 +85,7 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
         
         # SOLO log ciego (sin información sensible, IPs reales o UA)
-        logger.debug(
+        logger.info(
             f"BLIND_RELAY | {blind_request_id} | "
             f"{request.method} | {anonymized_ip}"
         )
@@ -63,25 +94,21 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
     
     def _anonymize_ip_completely(self, ip: str) -> str:
         """
-        Anonimización completa de IP.
-        
-        IPv4: 203.0.113.42 → 203.0.113.0
-        IPv6: 2001:db8:85a3:8d3:1319:8a2e:370:7348 → 2001:db8:85a3:8d3:0:0:0:0
+        Anonimización completa de IP delegada estricta a Rust.
         """
-        try:
-            addr = ipaddress.ip_address(ip)
-            
-            if isinstance(addr, ipaddress.IPv4Address):
-                parts = str(addr).split('.')
-                parts[-1] = '0'
-                return '.'.join(parts)
-            
-            elif isinstance(addr, ipaddress.IPv6Address):
-                parts = str(addr.exploded).split(':')
-                parts[4:] = ['0000', '0000', '0000', '0000']
-                return ':'.join(parts)
+        if ip_lib:
+            try:
+                ip_bytes = ip.encode('utf-8')
+                ptr = ip_lib.anonymize_ip(ip_bytes)
+                if ptr:
+                    result_bytes = ctypes.cast(ptr, ctypes.c_char_p).value
+                    result = result_bytes.decode('utf-8', errors='ignore')
+                    ip_lib.free_anonymized_ip(ptr)
+                    return result
+            except Exception as e:
+                logger.critical(f"CRITICAL PRIVACY FAILURE: Fallo en anonymize_ip de Rust: {e}. Activando modo degradado (0.0.0.0)")
+        else:
+            logger.critical("CRITICAL PRIVACY FAILURE: Libreria Rust ip_lib no cargada. Activando modo degradado (0.0.0.0)")
         
-        except ValueError:
-            pass
-        
-        return "0.0.0.0"  # nosec B104 (Fallback ultra-seguro anonimizado)
+        # Fallback ultra-seguro
+        return "0.0.0.0"

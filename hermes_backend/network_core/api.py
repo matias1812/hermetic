@@ -312,13 +312,14 @@ async def relay_blob_endpoint(request: Request, payload: RelayPayload):
     if not sender:
         raise HTTPException(status_code=400, detail="Sender not registered")
         
-    # Anti-replay: hash the per-message nonce before storing (UUID is 32 chars, key col is 64)
-    nonce_hash = hashlib.sha256(payload.session_key_hash.encode()).hexdigest()
+    # Anti-replay: hash the ciphertext blob to deduplicate the exact envelope (prevent payload tampering)
+    blob_bytes = bytes.fromhex(payload.encrypted_blob_hex)
+    nonce_hash = hashlib.sha3_256(blob_bytes).hexdigest()
     if db.is_key_used(nonce_hash):
-        raise HTTPException(status_code=400, detail="Replay attack detected (nonce already used)")
+        raise HTTPException(status_code=400, detail="Replay attack detected (envelope already relayed)")
     db.mark_key_used(nonce_hash, expires_at=int(time.time()) + 86400)
     
-    encrypted_bytes = bytes.fromhex(payload.encrypted_blob_hex)
+    encrypted_bytes = blob_bytes
     
     # Intentar enviar en tiempo real vía WebSocket
     ws_sent = await ws_manager.send_blob(payload.receiver_hash, {

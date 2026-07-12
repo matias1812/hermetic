@@ -35,6 +35,8 @@ def generate():
     with open('test_vectors/canonical_envelope_v1.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     
+    data['purpose'] = "canonical-serialization-only"
+    data['cryptographically_valid'] = False
     data['vectors'][0]['inputs']['kem_ciphertext_hex'] = ciphertext_kem_pad.hex()
     data['vectors'][0]['inputs']['signature_algorithm'] = signature_algorithm
     data['vectors'][0]['expected']['payload_hex'] = payload.hex()

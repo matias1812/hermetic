@@ -275,16 +275,13 @@ class HermesNativeCore:
                     associated_data=aad
                 )
 
-            if NATIVE_AVAILABLE:
-                # SPHINCS+ signature happens here, in Python
-                message_to_sign = HermesNativeCore.canonical_signed_payload(
-                    "ML-KEM-1024", "AES-256-GCM", "SLH-DSA-SHA2-128f",
-                    sender_id, receiver_id, timestamp_int,
-                    encrypted['kyber_ciphertext'], encrypted['aes_nonce'], encrypted['encrypted_message']
-                )
-                signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
-            else:
-                signature = encrypted['signature']
+            # SPHINCS+ signature happens here, in Python
+            message_to_sign = HermesNativeCore.canonical_signed_payload(
+                "ML-KEM-1024", "AES-256-GCM", "SLH-DSA-SHA2-128f",
+                sender_id, receiver_id, timestamp_int,
+                encrypted['kyber_ciphertext'], encrypted['aes_nonce'], encrypted['encrypted_message']
+            )
+            signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
                 
             kem_alg_out = "ML-KEM-1024"
             aead_alg_out = "AES-256-GCM"
@@ -381,7 +378,18 @@ class HermesNativeCore:
         signature_bytes = bytes.fromhex(package['signature'])
 
         # 3. Firma: Validación SPHINCS+ usando canonical_signed_payload
+        AES_GCM_NONCE_BYTES = 12
+        ML_KEM_1024_CIPHERTEXT_BYTES = 1568
+        
+        if len(aes_nonce_bytes) != AES_GCM_NONCE_BYTES:
+            raise SecurityError(f"AES-GCM nonce must be exactly {AES_GCM_NONCE_BYTES} bytes")
+            
         ciphertext_kem_bytes = bytes.fromhex(ciphertext_kem_hex) if ciphertext_kem_hex else b""
+        
+        if kem_alg == "ML-KEM-1024" and len(ciphertext_kem_bytes) != ML_KEM_1024_CIPHERTEXT_BYTES:
+            raise SecurityError(f"ML-KEM-1024 ciphertext must be exactly {ML_KEM_1024_CIPHERTEXT_BYTES} bytes")
+        elif kem_alg == "None" and len(ciphertext_kem_bytes) != 0:
+            raise SecurityError(f"Ciphertext KEM must be empty when kem_algorithm is None")
         message_to_verify = HermesNativeCore.canonical_signed_payload(
             kem_alg, aead_alg, sig_alg,
             sender_id, receiver_id, timestamp_int,
@@ -424,13 +432,9 @@ class HermesNativeCore:
                 else:
                     receiver_kyber_sk = bytes.fromhex(receiver_kyber_sk_hex)
                     try:
-                        from hermes_backend.crypto_core.hybrid_encryptor import HybridPQCDecryptor
-                        plaintext = HybridPQCDecryptor.decrypt(
-                            encrypted_message,
-                            ciphertext_kem_bytes,
-                            receiver_kyber_sk,
-                            associated_data=aad
-                        )
+                        shared_secret = KyberManager.decapsulate(ciphertext_kem_bytes, receiver_kyber_sk)
+                        aes_key = KyberManager.derive_aes_key(shared_secret)
+                        plaintext = AEADCipher.decrypt(bytes(encrypted_message), aes_key, aes_nonce_bytes, aad)
                     except Exception as e:
                         raise InvalidCiphertextError(str(e))
 

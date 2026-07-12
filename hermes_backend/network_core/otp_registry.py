@@ -1,10 +1,13 @@
 import hashlib
 import logging
-from typing import Set
+import time
+from typing import Dict
+import threading
+import uuid
 
 try:
-    import hermes_native
-    NATIVE_AVAILABLE = hasattr(hermes_native, "PyOTPKeyRegistry")
+    import hermes_ffi
+    NATIVE_AVAILABLE = hasattr(hermes_ffi, "PyOTPKeyRegistry")
 except ImportError:
     NATIVE_AVAILABLE = False
 
@@ -28,84 +31,133 @@ class SessionKeyRegistry:
     """
 
     def __init__(self):
-        self.memory_cache: Set[str] = set()  # Cache en RAM (hashes, no claves)
+        self._lock = threading.RLock()
+        self.memory_cache: Dict[str, dict] = {}  # key_hash -> {'state': str, 'registered_at': float, 'token': bytes}
+        self.TTL_SECONDS = 300 # Igual que Rust
 
         self.use_native = NATIVE_AVAILABLE
         if self.use_native:
             try:
-                self.native_registry = hermes_native.PyOTPKeyRegistry()
+                self.native_registry = hermes_ffi.PyOTPKeyRegistry()
             except Exception as e:
                 logger.warning(f"Failed to initialize native registry: {e}")
                 self.use_native = False
 
-    def is_key_used(self, key: bytes) -> bool:
+    def claim(self, key: bytes) -> bytes | None:
         """
-        Verifica si el hash de una clave de sesion ya fue registrado.
-
-        FAIL-CLOSED:
-        Si la BD falla -> lanzar excepcion (no asumir 'no usada').
-
-        Raises:
-            DatabaseError: Si no se puede verificar.
+        Intenta reclamar el uso de una firma (hash) atómicamente.
+        Si ya existe (o falla), devuelve None. Si tiene éxito devuelve un claim_token.
         """
         key_hash = hashlib.sha3_256(key).hexdigest()
 
-        # Verificar cache en RAM (rapido)
-        if key_hash in self.memory_cache:
-            return True
+        with self._lock:
+            # Prune expired
+            now = time.time()
+            expired_keys = [
+                k for k, v in self.memory_cache.items() 
+                if now - v['registered_at'] >= self.TTL_SECONDS
+            ]
+            for k in expired_keys:
+                del self.memory_cache[k]
 
-        if self.use_native:
+            if key_hash in self.memory_cache:
+                return None
+
+            if len(self.memory_cache) >= 100_000:
+                logger.critical("RegistryCapacityError: OTPKeyRegistry is at max capacity")
+                return None
+
+            if self.use_native:
+                try:
+                    # El nuevo API devuelve bytes (token) si reclamó el hash con éxito
+                    token = self.native_registry.claim(list(key))
+                    if token is not None:
+                        return bytes(token)
+                    return None
+                except Exception as e:
+                    logger.warning(f"Native registry claim failed: {e}")
+
+            # Fallback a la BD si falla el nativo o no está disponible
             try:
-                if self.native_registry.is_key_used(list(key)):
-                    return True
-            except Exception as e:
-                logger.warning(f"Native registry key check failed: {e}")
+                if db.is_key_used(key_hash):
+                    return None
+                token_bytes = uuid.uuid4().bytes
+                self.memory_cache[key_hash] = {
+                    'state': 'pending',
+                    'registered_at': now,
+                    'token': token_bytes
+                }
+                return token_bytes
+            except DatabaseError:
+                logger.critical("Error verificando claim en BD. Denegando acceso.")
+                raise
 
-        # Verificar en BD
-        try:
-            return db.is_otp_key_used(key_hash)
-        except DatabaseError:
-            # FAIL-CLOSED: No podemos verificar -> RECHAZAR
-            logger.critical(
-                "No se pudo verificar reuso de clave de sesion. "
-                "Operacion RECHAZADA por seguridad."
-            )
-            raise  # Propagar error
-
-    def register_key(self, key: bytes) -> None:
+    def commit(self, key: bytes, claim_token: bytes) -> None:
         """
-        Registra el hash de una clave de sesion como usada.
-
-        FAIL-CLOSED:
-        Si el registro falla -> lanzar excepcion.
-        La operacion de cifrado DEBE abortarse.
-
-        Raises:
-            DatabaseError: Si no se puede registrar.
+        Consolida el uso tras un descifrado exitoso.
         """
         key_hash = hashlib.sha3_256(key).hexdigest()
+        with self._lock:
+            entry = self.memory_cache.get(key_hash)
+            if entry and entry['state'] == 'pending' and entry['token'] == claim_token:
+                entry['state'] = 'consumed'
+                entry['registered_at'] = time.time()
+            else:
+                return
+            
+            if self.use_native:
+                try:
+                    self.native_registry.commit(list(key), list(claim_token))
+                except Exception as e:
+                    logger.warning(f"Native registry commit failed: {e}")
 
-        # Registrar en cache RAM
-        self.memory_cache.add(key_hash)
-
-        if self.use_native:
             try:
-                self.native_registry.register_key(list(key))
-            except Exception as e:
-                logger.warning(f"Native registry key registration failed: {e}")
+                db.mark_key_used(key_hash, int(time.time()) + 259200)
+            except DatabaseError:
+                logger.critical("Error escribiendo commit en BD.")
+                # Si falla, no hay forma segura de revertir, la transaccion queda inconsistente en BD
+                # pero segura en RAM.
 
-        # Registrar en BD
-        try:
-            db.register_otp_key(key_hash)
-        except DatabaseError:
-            # FAIL-CLOSED: No podemos registrar -> RECHAZAR
-            logger.critical(
-                "No se pudo registrar clave de sesion en BD. "
-                "Operacion RECHAZADA. Clave NO usada."
-            )
-            # Revertir cache RAM
-            self.memory_cache.discard(key_hash)
-            raise  # Propagar error
+    def reject(self, key: bytes, claim_token: bytes) -> None:
+        """
+        Rechaza el mensaje por un fallo determinista criptografico. 
+        Lo marca como consumido/rechazado para evitar reintentos continuos del mismo mensaje corrupto.
+        """
+        key_hash = hashlib.sha3_256(key).hexdigest()
+        with self._lock:
+            entry = self.memory_cache.get(key_hash)
+            if entry and entry['state'] == 'pending' and entry['token'] == claim_token:
+                entry['state'] = 'rejected'
+                entry['registered_at'] = time.time()
+            else:
+                return
+            
+            if self.use_native:
+                try:
+                    self.native_registry.reject(list(key), list(claim_token))
+                except Exception as e:
+                    logger.warning(f"Native registry reject failed: {e}")
+
+            try:
+                db.mark_key_used(key_hash, int(time.time()) + 259200) # Logica de DB no distingue rejected/consumed aún
+            except DatabaseError:
+                logger.critical("Error escribiendo reject en BD.")
+
+    def release(self, key: bytes, claim_token: bytes) -> None:
+        """
+        Libera un claim previo si hubo fallo transitorio interno, para permitir reintentos.
+        """
+        key_hash = hashlib.sha3_256(key).hexdigest()
+        with self._lock:
+            entry = self.memory_cache.get(key_hash)
+            if entry and entry['state'] == 'pending' and entry['token'] == claim_token:
+                del self.memory_cache[key_hash]
+
+            if self.use_native:
+                try:
+                    self.native_registry.release(list(key), list(claim_token))
+                except Exception as e:
+                    logger.warning(f"Native registry release failed: {e}")
 
 
 # Alias de compatibilidad — mantiene imports existentes funcionando

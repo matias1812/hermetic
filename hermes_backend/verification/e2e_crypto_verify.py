@@ -82,7 +82,8 @@ class EndToEndCryptoVerify:
                 env1,
                 keys_receiver["kyber_sk_hex"],
                 keys_sender["sphincs_pk_hex"],
-                session_key_hex
+                session_key_hex,
+                expected_sender_id="alice"
             )
             dec_text = dec_bytes.decode('utf-8')
             summary["logs"].append(f"Texto recuperado por receptor legítimo: '{dec_text}'")
@@ -101,7 +102,8 @@ class EndToEndCryptoVerify:
                     tampered_env,
                     keys_receiver["kyber_sk_hex"],
                     keys_sender["sphincs_pk_hex"],
-                    session_key_hex
+                    session_key_hex,
+                    expected_sender_id="alice"
                 )
             except Exception as e:
                 tamper_detected = True
@@ -121,7 +123,8 @@ class EndToEndCryptoVerify:
                     replay_env,
                     keys_receiver["kyber_sk_hex"],
                     keys_sender["sphincs_pk_hex"],
-                    session_key_hex
+                    session_key_hex,
+                    expected_sender_id="alice"
                 )
             except Exception as e:
                 aad_detected = True
