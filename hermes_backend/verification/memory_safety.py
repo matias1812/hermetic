@@ -8,7 +8,7 @@ class MemorySafetyVerify:
     @staticmethod
     def run_test() -> dict:
         summary = {
-            "name": "Memory Safety / Secure Zeroization Audit",
+            "name": "Prueba de sobrescritura observable de un buffer bytearray",
             "passed": False,
             "logs": [],
             "metrics": {}

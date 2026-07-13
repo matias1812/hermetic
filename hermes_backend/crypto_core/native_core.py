@@ -235,64 +235,43 @@ class HermesNativeCore:
         aad = HermesNativeCore._build_aad(sender_id, receiver_id, timestamp_int)
 
         if not receiver_kyber_pk_hex or receiver_kyber_pk_hex == "none":
-            aes_key = KyberManager.derive_aes_key(bytes(session_key))
-            encrypted = AEADCipher.encrypt(pt, aes_key, aad)
+            raise ValueError("receiver_kyber_pk_hex is required for ML-KEM-1024 envelopes")
             
-            message_to_sign = HermesNativeCore.canonical_signed_payload(
-                "None", "AES-256-GCM", "SLH-DSA-SHA2-128f",
-                sender_id, receiver_id, timestamp_int,
-                b"", encrypted['nonce'], encrypted['ciphertext']
+        if NATIVE_AVAILABLE:
+            encrypted = hermes_ffi.encapsulate_and_encrypt_native(
+                receiver_kyber_pk_hex,
+                sender_key_handle,
+                session_id_str,
+                pt,
+                aad
             )
-            
-            # Pack algorithms for the envelope
-            kem_alg_out = "None"
-            aead_alg_out = "AES-256-GCM"
-            sig_alg_out = "SLH-DSA-SHA2-128f"
-            
-            signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
-            
-            disperser = CSPRNGDisperser(session_key)
-            whitened_payload = disperser.whiten_data(bytearray(encrypted['ciphertext']))
-            
-            kyber_ciphertext_hex = ""
-            encrypted_message_hex = encrypted['ciphertext'].hex()
-            aes_nonce_hex = encrypted['nonce'].hex()
         else:
-            if NATIVE_AVAILABLE:
-                encrypted = hermes_ffi.encapsulate_and_encrypt_native(
-                    receiver_kyber_pk_hex,
-                    sender_key_handle,
-                    session_id_str,
-                    pt,
-                    aad
-                )
-            else:
-                receiver_kyber_pk = bytes.fromhex(receiver_kyber_pk_hex)
-                encrypted = HybridPQCEncryptor.encrypt(
-                    pt,
-                    receiver_kyber_pk,
-                    sender_sphincs_sk, # Only used in pure-python path to do both
-                    associated_data=aad
-                )
-
-            # SPHINCS+ signature happens here, in Python
-            message_to_sign = HermesNativeCore.canonical_signed_payload(
-                "ML-KEM-1024", "AES-256-GCM", "SLH-DSA-SHA2-128f",
-                sender_id, receiver_id, timestamp_int,
-                encrypted['kyber_ciphertext'], encrypted['aes_nonce'], encrypted['encrypted_message']
+            receiver_kyber_pk = bytes.fromhex(receiver_kyber_pk_hex)
+            encrypted = HybridPQCEncryptor.encrypt(
+                pt,
+                receiver_kyber_pk,
+                sender_sphincs_sk, # Only used in pure-python path to do both
+                associated_data=aad
             )
-            signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
-                
-            kem_alg_out = "ML-KEM-1024"
-            aead_alg_out = "AES-256-GCM"
-            sig_alg_out = "SLH-DSA-SHA2-128f"
-                
-            disperser = CSPRNGDisperser(session_key)
-            whitened_payload = disperser.whiten_data(bytearray(encrypted['encrypted_message']))
+
+        # SPHINCS+ signature happens here, in Python
+        message_to_sign = HermesNativeCore.canonical_signed_payload(
+            "ML-KEM-1024", "AES-256-GCM", "SLH-DSA-SHA2-128f",
+            sender_id, receiver_id, timestamp_int,
+            encrypted['kyber_ciphertext'], encrypted['aes_nonce'], encrypted['encrypted_message']
+        )
+        signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
             
-            kyber_ciphertext_hex = encrypted['kyber_ciphertext'].hex()
-            encrypted_message_hex = encrypted['encrypted_message'].hex()
-            aes_nonce_hex = encrypted['aes_nonce'].hex()
+        kem_alg_out = "ML-KEM-1024"
+        aead_alg_out = "AES-256-GCM"
+        sig_alg_out = "SLH-DSA-SHA2-128f"
+            
+        disperser = CSPRNGDisperser(session_key)
+        whitened_payload = disperser.whiten_data(bytearray(encrypted['encrypted_message']))
+            
+        kyber_ciphertext_hex = encrypted['kyber_ciphertext'].hex()
+        encrypted_message_hex = encrypted['encrypted_message'].hex()
+        aes_nonce_hex = encrypted['aes_nonce'].hex()
 
         stego_svg = GeometricStegoContainer.embed_payload(whitened_payload)
 
@@ -386,10 +365,11 @@ class HermesNativeCore:
             
         ciphertext_kem_bytes = bytes.fromhex(ciphertext_kem_hex) if ciphertext_kem_hex else b""
         
-        if kem_alg == "ML-KEM-1024" and len(ciphertext_kem_bytes) != ML_KEM_1024_CIPHERTEXT_BYTES:
+        if kem_alg != "ML-KEM-1024":
+            raise UnsupportedAlgorithmError("Only ML-KEM-1024 is allowed in this envelope version")
+            
+        if len(ciphertext_kem_bytes) != ML_KEM_1024_CIPHERTEXT_BYTES:
             raise SecurityError(f"ML-KEM-1024 ciphertext must be exactly {ML_KEM_1024_CIPHERTEXT_BYTES} bytes")
-        elif kem_alg == "None" and len(ciphertext_kem_bytes) != 0:
-            raise SecurityError(f"Ciphertext KEM must be empty when kem_algorithm is None")
         message_to_verify = HermesNativeCore.canonical_signed_payload(
             kem_alg, aead_alg, sig_alg,
             sender_id, receiver_id, timestamp_int,

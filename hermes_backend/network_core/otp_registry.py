@@ -13,6 +13,8 @@ except ImportError:
 
 from hermes_backend.network_core.db_connection import db, DatabaseError
 
+REPLAY_TTL_SECONDS = 300
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,7 +114,7 @@ class SessionKeyRegistry:
                     logger.warning(f"Native registry commit failed: {e}")
 
             try:
-                db.mark_key_used(key_hash, int(time.time()) + 259200)
+                db.mark_key_used(key_hash, int(time.time()) + REPLAY_TTL_SECONDS)
             except DatabaseError:
                 logger.critical("Error escribiendo commit en BD.")
                 # Si falla, no hay forma segura de revertir, la transaccion queda inconsistente en BD
@@ -139,7 +141,7 @@ class SessionKeyRegistry:
                     logger.warning(f"Native registry reject failed: {e}")
 
             try:
-                db.mark_key_used(key_hash, int(time.time()) + 259200) # Logica de DB no distingue rejected/consumed aún
+                db.mark_key_used(key_hash, int(time.time()) + REPLAY_TTL_SECONDS) # Logica de DB no distingue rejected/consumed aún
             except DatabaseError:
                 logger.critical("Error escribiendo reject en BD.")
 

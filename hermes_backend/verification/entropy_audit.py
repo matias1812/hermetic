@@ -9,7 +9,7 @@ class EntropyTestsVerify:
     @staticmethod
     def run_test() -> dict:
         summary = {
-            "name": "NIST SP 800-22 Entropy Verification Suite",
+            "name": "Sanity checks estadísticos inspirados en pruebas básicas de SP 800-22",
             "passed": False,
             "logs": [],
             "metrics": {}
