@@ -32,10 +32,32 @@ logger = logging.getLogger(__name__)
 
 import os
 
-try:
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.find_spec("hermes_ffi")
+
+NATIVE_AVAILABLE = (
+    spec is not None
+    and spec.origin is not None
+    and Path(spec.origin).suffix.lower() in {".pyd", ".so", ".dylib"}
+)
+
+if NATIVE_AVAILABLE:
     import hermes_ffi
-    if hasattr(hermes_ffi, 'generate_keys_native'):
-        NATIVE_AVAILABLE = True
+
+    required_symbols = {
+        "generate_keys_native",
+        "encrypt_envelope_native",
+        "decrypt_envelope_native",
+        "dispose_key_handle",
+    }
+
+    NATIVE_AVAILABLE = all(
+        hasattr(hermes_ffi, symbol)
+        for symbol in required_symbols
+    )
+    if NATIVE_AVAILABLE:
         logger.info(
             "\n==================================================\n"
             "Execution mode\n"
@@ -45,10 +67,8 @@ try:
             "=================================================="
         )
     else:
-        NATIVE_AVAILABLE = False
-        logger.warning("Found hermes_ffi but missing generate_keys_native. Treating as unavailable.")
-except ImportError:
-    NATIVE_AVAILABLE = False
+        logger.warning("Found hermes_ffi but missing required native symbols. Treating as unavailable.")
+else:
     env_mode = os.environ.get("HERMES_ENV", os.environ.get("HERMES_MODE", "development")).lower()
     if env_mode in ("production", "prod"):
         fatal_msg = (

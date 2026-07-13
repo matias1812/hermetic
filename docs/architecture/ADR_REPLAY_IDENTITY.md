@@ -12,6 +12,11 @@ The replay cache (`OTPKeyRegistry`) enforces three distinct states:
 - **Consumed**: A `commit` operation finalized the usage (Successful decryption).
 - **Rejected**: A `reject` operation flagged the message as definitively invalid (e.g. invalid AES nonce or KEM length).
 
+### 1.1 Database Redundancy Policy (Fail-Closed)
+La máquina transaccional vive exclusivamente en RAM/Rust. La DB conserva únicamente estados terminales `Consumed` / `Rejected` durante 300 segundos (TTL exacto) como defensa redundante entre componentes, en caso de fallo del nodo en arquitecturas distribuidas.
+- Quedan estrictamente **fuera de la DB** y sin persistencia: `claim`, `claim_token`, `release`, y el estado `Pending`.
+- Si la DB falla al registrar el estado terminal, se registra un warning pero el estado RAM sigue siendo autoritativo y la transacción completa con éxito local.
+
 ### 2. State Transitions and Errors
 Strict state transitions must be enforced. If the token is incorrect or the transition is invalid from the current state, the operation must not change the state and must return an explicit error.
 
