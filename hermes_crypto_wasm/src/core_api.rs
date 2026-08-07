@@ -417,6 +417,24 @@ impl HermesCore {
             .map_err(|_| "Invalid UTF-8 in decrypted message".to_string())
     }
 
+    /// Exporta el estado serializado en JSON de la sesión Double Ratchet de un contacto.
+    pub fn export_ratchet_state(&self, contact_id: &str) -> Result<String, String> {
+        let ratchet = self
+            .sessions
+            .get(contact_id)
+            .ok_or_else(|| "Session not found".to_string())?;
+        serde_json::to_string(ratchet)
+            .map_err(|e| format!("Serialization failed: {}", e))
+    }
+
+    /// Importa un estado serializado en JSON de la sesión Double Ratchet de un contacto.
+    pub fn import_ratchet_state(&mut self, contact_id: &str, state_json: &str) -> Result<bool, String> {
+        let ratchet: DHRatchet = serde_json::from_str(state_json)
+            .map_err(|e| format!("Deserialization failed: {}", e))?;
+        self.sessions.insert(contact_id.to_string(), ratchet);
+        Ok(true)
+    }
+
     /// Verifica Safety Number
     pub fn verify_identity(&self, _contact_id: &str, _fingerprint: &str) -> bool {
         true

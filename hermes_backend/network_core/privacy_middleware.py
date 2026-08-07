@@ -80,10 +80,6 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
         # Procesar request
         response = await call_next(request)
         
-        # Inyectar cabeceras globales de seguridad
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
-        
         # SOLO log ciego (sin información sensible, IPs reales o UA)
         logger.info(
             f"BLIND_RELAY | {blind_request_id} | "

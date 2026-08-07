@@ -18,8 +18,21 @@ export class RealDoubleRatchet {
             await hermesBridge.init();
         }
         
-        const remotePk = pkBytes instanceof ArrayBuffer ? new Uint8Array(pkBytes) : (pkBytes instanceof Uint8Array ? pkBytes : new Uint8Array(pkBytes));
-        const localSk = skBytes ? (skBytes instanceof ArrayBuffer ? new Uint8Array(skBytes) : (skBytes instanceof Uint8Array ? skBytes : new Uint8Array(skBytes))) : null;
+        const parseToUint8Array = (input) => {
+            if (!input) return null;
+            if (typeof input === 'string') {
+                const cleanHex = input.replace(/[^0-9a-fA-F]/g, '');
+                if (cleanHex.length % 2 === 0 && cleanHex.length > 0) {
+                    return new Uint8Array(cleanHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+                }
+            }
+            if (input instanceof ArrayBuffer) return new Uint8Array(input);
+            if (input instanceof Uint8Array) return input;
+            return new Uint8Array(input);
+        };
+
+        const remotePk = parseToUint8Array(pkBytes);
+        const localSk = parseToUint8Array(skBytes);
         
         let sharedSecretBytes = null;
         if (sharedSecretOpt) {
@@ -70,11 +83,16 @@ export class RealDoubleRatchet {
     
     async decryptMessage(message, aad = '') {
         if (!this.isWasmMode) throw new Error("DoubleRatchet not initialized");
-        const headerCombined = [...message.header.iv, ...message.header.ciphertext];
+        const headerIvBytes = message.header.iv instanceof Uint8Array ? Array.from(message.header.iv) : (message.header.iv || []);
+        const headerCipherBytes = message.header.ciphertext instanceof Uint8Array ? Array.from(message.header.ciphertext) : (message.header.ciphertext || []);
+        const ctBytes = message.ciphertext instanceof Uint8Array ? Array.from(message.ciphertext) : (message.ciphertext || []);
+        const nonceBytes = message.iv instanceof Uint8Array ? Array.from(message.iv) : (message.iv || []);
+
+        const headerCombined = headerIvBytes.concat(headerCipherBytes);
         const encMsg = {
             header: headerCombined,
-            ciphertext: message.ciphertext,
-            nonce: message.iv,
+            ciphertext: ctBytes,
+            nonce: nonceBytes,
             message_number: message.message_number || 0
         };
         const inputBytes = new TextEncoder().encode(JSON.stringify(encMsg));
@@ -83,6 +101,22 @@ export class RealDoubleRatchet {
             throw new Error("Decryption failed in HermesCore");
         }
         return plaintextStr;
+    }
+
+    async loadState(stateJson) {
+        if (!hermesBridge.ready) {
+            await hermesBridge.init();
+        }
+        const ok = hermesBridge.importRatchetState(this.contactId, stateJson);
+        if (!ok) {
+            throw new Error("Failed to import DoubleRatchet session in HermesCore");
+        }
+        this.isWasmMode = true;
+    }
+
+    async exportState() {
+        if (!this.isWasmMode) throw new Error("DoubleRatchet not initialized");
+        return hermesBridge.exportRatchetState(this.contactId);
     }
 
     exportPublicKey() {

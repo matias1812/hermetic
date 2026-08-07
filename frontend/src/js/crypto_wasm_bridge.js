@@ -198,6 +198,16 @@ export class RealHermesCrypto {
     encryptMessage(contactId, plaintext) { return this.sealMessage(contactId, plaintext); }
     decryptMessage(contactId, ciphertext) { return this.openMessage(contactId, ciphertext); }
 
+    encryptPayload(text, sessionKeyHex, senderId, receiverId) {
+        this._assertReady('encryptPayload');
+        return this.rustCrypto.encrypt_legacy_payload(text, sessionKeyHex, senderId, receiverId);
+    }
+
+    decryptPayload(encryptedPackage, sessionKeyHex) {
+        this._assertReady('decryptPayload');
+        return this.rustCrypto.decrypt_legacy_payload(encryptedPackage, sessionKeyHex);
+    }
+
     createGroup(groupId, memberIds) {
         this._assertReady('createGroup');
         console.debug("[HermesBridge] createGroup -> id:", groupId);
@@ -273,6 +283,18 @@ export class RealHermesCrypto {
         this._assertReady('createSession');
         console.debug("[HermesBridge] createSession -> peer:", contactId);
         return this.rustCrypto.create_session(contactId, isAlice, remotePubKey, sharedSecretOpt, localSkOpt, localPubOpt);
+    }
+
+    exportRatchetState(contactId) {
+        this._assertReady('exportRatchetState');
+        console.debug("[HermesBridge] exportRatchetState -> contact:", contactId);
+        return this.rustCrypto.export_ratchet_state(contactId);
+    }
+
+    importRatchetState(contactId, stateJson) {
+        this._assertReady('importRatchetState');
+        console.debug("[HermesBridge] importRatchetState -> contact:", contactId);
+        return this.rustCrypto.import_ratchet_state(contactId, stateJson);
     }
 
     generatePreKeyBundle(opkIdOpt = null) {

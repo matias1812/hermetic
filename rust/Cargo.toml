@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "hermes_ffi_core",
+    "hermes_replay_sql",
+    "hermes_ffi_py"
+]

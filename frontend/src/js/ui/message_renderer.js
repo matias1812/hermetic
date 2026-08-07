@@ -122,7 +122,28 @@ export function renderMessages() {
 
             const audioEl = document.createElement('audio');
             audioEl.id  = audioId;
-            audioEl.src = msg.plaintext;
+            
+            // Fix NotSupportedError & CSP block for large data URIs
+            if (msg.plaintext && msg.plaintext.startsWith('data:')) {
+                try {
+                    const arr = msg.plaintext.split(',');
+                    const mime = arr[0].match(/:(.*?);/)[1];
+                    const bstr = atob(arr[1]);
+                    let n = bstr.length;
+                    const u8arr = new Uint8Array(n);
+                    while (n--) {
+                        u8arr[n] = bstr.charCodeAt(n);
+                    }
+                    const blob = new Blob([u8arr], {type: mime});
+                    audioEl.src = URL.createObjectURL(blob);
+                } catch (e) {
+                    console.error("Error decoding audio base64:", e);
+                    audioEl.src = msg.plaintext;
+                }
+            } else {
+                audioEl.src = msg.plaintext;
+            }
+            
             audioEl.preload = 'metadata';
             playerDiv.appendChild(audioEl);
 
@@ -255,8 +276,27 @@ export function renderMessages() {
             `;
             
             const audioEl = document.createElement('audio');
-            audioEl.src = msg.plaintext;
-            audioEl.className = 'hidden';
+            
+            if (msg.plaintext && msg.plaintext.startsWith('data:')) {
+                try {
+                    const arr = msg.plaintext.split(',');
+                    const mime = arr[0].match(/:(.*?);/)[1];
+                    const bstr = atob(arr[1]);
+                    let n = bstr.length;
+                    const u8arr = new Uint8Array(n);
+                    while (n--) {
+                        u8arr[n] = bstr.charCodeAt(n);
+                    }
+                    const blob = new Blob([u8arr], {type: mime});
+                    audioEl.src = URL.createObjectURL(blob);
+                } catch (e) {
+                    console.error("Error decoding ephemeral audio base64:", e);
+                    audioEl.src = msg.plaintext;
+                }
+            } else {
+                audioEl.src = msg.plaintext;
+            }
+            
             audioEl.preload = 'auto';
             placeholder.appendChild(audioEl);
             

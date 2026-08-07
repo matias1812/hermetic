@@ -116,7 +116,7 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                         sender:        state.currentUser,
                         receiver:      targetId,
                         plaintext:     base64,
-                        type:          'audio',
+                        type:          viewOnceEnabled ? 'ephemeral_audio' : 'audio',
                         audioMime:     mimeType,
                         audioDuration: durationSec,
                         verified:      true,
@@ -365,6 +365,11 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
             const file = e.target.files[0];
             if (!file) {
                 showToast('Por favor selecciona una imagen', true);
+                return;
+            }
+            if (!file.type.startsWith('image/')) {
+                showToast('Solo se permiten imágenes', true);
+                photoInput.value = "";
                 return;
             }
             

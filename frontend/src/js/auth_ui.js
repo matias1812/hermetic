@@ -398,22 +398,6 @@ export async function doLoginTransition(alias, password) {
         document.getElementById("my-avatar").textContent = displayAliasLogin.substring(0, 2).toUpperCase();
         if (window.hermesTheme) window.hermesTheme.onLogin(state.currentUser);
 
-        // Start Synchronization
-        const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-        const wsProtocol = isLocal ? "ws:" : "wss:";
-        const wsUrl = `${wsProtocol}//${window.location.host}`;
-        state.sync = new SyncManager(state.currentUser, state.storage, state.contacts, state.groups, state.chats, () => {
-            renderContactSidebar();
-            renderGroupSidebar();
-            if (state.activeContact) {
-                state.chatMessages = state.chats.getMessages(state.activeContact);
-                renderMessages();
-            } else if (state.activeGroup) {
-                state.chatMessages = state.chats.getMessages(state.activeGroup);
-                renderMessages();
-            }
-        });
-        
         window.sendSystemMessage = async (msg) => {
             if (state.activeContact || state.activeGroup) {
                 try {
@@ -429,12 +413,6 @@ export async function doLoginTransition(alias, password) {
                 }
             }
         };
-        
-        if (state.activeContact || state.activeGroup) {
-            state.sync.activeChatId = state.activeContact || state.activeGroup;
-        }
-        
-        await state.sync.start(wsUrl);
 
     } catch (e) {
         if (e.name === 'StorageDecryptionError') {

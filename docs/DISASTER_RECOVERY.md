@@ -17,7 +17,7 @@ Este documento describe los procedimientos operativos estándar (SOPs) para rest
 
 ## 2. Pérdida o Corrupción de la Base de Datos (MySQL)
 
-**Escenario:** La tabla `users` o `used_key_hashes` se corrompe o se pierde sin un backup reciente.
+**Escenario:** La tabla `users` o `replay_claims` se corrompe o se pierde sin un backup reciente.
 **Impacto:** Los usuarios no podrán iniciar sesión (error 401/404 al verificar su identidad).
 
 **Procedimiento de Recuperación:**
@@ -25,7 +25,7 @@ Este documento describe los procedimientos operativos estándar (SOPs) para rest
 2. Truncar las tablas para forzar un estado limpio:
    ```sql
    TRUNCATE TABLE users;
-   TRUNCATE TABLE used_key_hashes;
+   TRUNCATE TABLE replay_claims;
    ```
 3. Activar el protocolo de "Re-registro transparente": 
    * Los clientes frontend detectarán el error 401 en sus peticiones `/api/fetch` o durante el heartbeat.

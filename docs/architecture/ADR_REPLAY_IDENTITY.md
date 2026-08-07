@@ -2,44 +2,47 @@
 
 ## Context
 The system required a robust replay cache mechanism using tokens to safely handle concurrent decryption logic (avoiding TOCTOU vulnerabilities), as well as a strict identity registry to enforce sender authenticity. 
+Recently, the architecture expanded to support multi-domain replay prevention to separate API authentication, E2E envelopes, and Relay nonces.
 
 ## Decisions
 
-### 1. Replay Cache States
-The replay cache (`OTPKeyRegistry`) enforces three distinct states:
+### 1. Multi-Domain Replay Separation
+Replay storage has been segregated into immutable, backend-controlled domains:
+- `HERMES-REPLAY-ENVELOPE-V1`: For E2E message envelopes.
+- `HERMES-REPLAY-API-AUTH-V1`: For API endpoint authentication signatures.
+- `HERMES-REPLAY-RELAY-V1`: For blind relay nonces.
+
+**Security Rule:** The domain must NEVER be controlled or derived from client inputs (e.g., HTTP headers or JSON payload). It is statically hardcoded in backend methods.
+
+### 2. TTL and Freshness Alignment
+The TTL for each domain is mathematically aligned with its specific threat model:
+
+#### API Authentication and Envelopes
+- `API_AUTH_FRESHNESS_SECONDS = 300`
+- `API_AUTH_RETENTION_SECONDS = 300`
+Since API signatures enforce a strict 300-second timestamp freshness window, retaining the hash for 300 seconds is sufficient. After 300 seconds, the timestamp freshness check will naturally reject any replay attempts, making longer retention redundant.
+
+#### Blind Relay Nonces
+Para el webhook de relevo de mensajes cifrados (`/api/relay`), se implementa el modelo de **"Nueva firma por cada intento"**:
+- **Frescura de Autenticación (`API_AUTH_FRESHNESS_SECONDS`):** 300 segundos. El timestamp de la cabecera HTTP y la firma SPHINCS+ asociada deben generarse de nuevo por cada intento de retransmisión.
+- **Retención del Nonce (`RELAY_REPLAY_RETENTION_SECONDS`):** 86400 segundos (24 horas). El identificador del payload (`relay_nonce`) se estabiliza. Una vez que el nodo acepta el mensaje en su cola RAM local, realiza un `commit` sobre el nonce por 24h para evitar la entrega duplicada.
+- **Pérdida ante reinicio:** Si el servidor se reinicia *después* de un `commit` pero antes de entregarlo, el mensaje efímero en RAM se pierde pero el nonce en SQL sigue marcado como consumido. Ante esta pérdida, se prioriza conservar la protección anti-replay sacrificando la reentrega (comportamiento deliberadamente **fail-closed respecto al replay**). No es puramente "fail-secure", pues se sacrifica disponibilidad de entrega intencionalmente.
+
+### 3. Commit Semantics and Idempotency
+- **"Consume Before Effect" (API Auth):** For API endpoints, the signature is claimed and committed *before* the endpoint's business logic is executed. This ensures a signature is strictly single-use per attempt.
+- **Idempotency:** Replay protection (preventing reuse of the same authorization) is distinct from Idempotency (preventing reuse of the same business effect). Endpoints with side effects (like `/api/backup` or `/api/clear`) must rely on a separate, signed `operation_id` for idempotency if retries are expected, as a transient failure will invalidate the authentication signature but leave the business effect unknown to the client.
+
+### 4. Replay Cache States
+The replay cache (`ReplayRegistry`) enforces three distinct states:
 - **Missing**: The key hash is not known (or has expired). A `claim` transitions it to `Pending`.
 - **Pending**: The hash has been claimed and a strictly 16-byte `claim_token` has been issued.
 - **Consumed**: A `commit` operation finalized the usage (Successful decryption).
 - **Rejected**: A `reject` operation flagged the message as definitively invalid (e.g. invalid AES nonce or KEM length).
 
-### 1.1 Database Redundancy Policy (Fail-Closed)
-La máquina transaccional vive exclusivamente en RAM/Rust. La DB conserva únicamente estados terminales `Consumed` / `Rejected` durante 300 segundos (TTL exacto) como defensa redundante entre componentes, en caso de fallo del nodo en arquitecturas distribuidas.
-- Quedan estrictamente **fuera de la DB** y sin persistencia: `claim`, `claim_token`, `release`, y el estado `Pending`.
-- Si la DB falla al registrar el estado terminal, se registra un warning pero el estado RAM sigue siendo autoritativo y la transacción completa con éxito local.
-
-### 2. State Transitions and Errors
-Strict state transitions must be enforced. If the token is incorrect or the transition is invalid from the current state, the operation must not change the state and must return an explicit error.
-
-**Valid Transitions:**
-- `claim(hash)`: Missing → Pending(token)
-- `commit(hash, correct_token)`: Pending → Consumed
-- `reject(hash, correct_token)`: Pending → Rejected
-- `release(hash, correct_token)`: Pending → Missing
-
-**Invalid Transitions (Errors):**
-- Invalid token provided: Throws `InvalidClaimTokenError` (No state change).
-- `commit`/`reject`/`release` called on `Consumed` or `Rejected`: Throws `InvalidReplayTransitionError` (No state change).
-
-### 3. Failure Handling & Fallback
+### 5. Failure Handling & Fallback
 - **Deterministic Cryptographic Failures**: (e.g. invalid tag, incorrect lengths) transition to `Rejected` via `reject`.
 - **Transient Internal Failures**: (e.g. database timeout prior to state commitment) trigger a `Release`, purging the `Pending` state.
-- **Unknown Failures & Commit Failures**: Any unknown exception or a failure in the `commit` itself will **Fail-Closed**. The state is left in `Pending`, blocking future replays until the TTL (300 seconds) expires.
+- **Unknown Failures & Commit Failures**: Any unknown exception or a failure in the `commit` itself will **Fail-Closed**. The state is left in `Pending`, blocking future replays until the TTL expires.
 
-### 4. Identity and Sender Validation
-- `expected_sender_id` is now a mandatory parameter, enforced with `hmac.compare_digest` to prevent basic spoofing.
-- The Trust Store must eventually replace dynamic arbitrary public keys.
-
-### 4. Sizes and Algorithms
-- Enforces strict KEM lengths: `ML-KEM-1024` ciphertext is exactly 1568 bytes.
-- Enforces strict AEAD sizes: `AES-256-GCM` nonce is exactly 12 bytes.
-- Algorithms are authenticated inside the payload canonical string.
+### 6. Legacy Migration
+La migración desde la tabla de hashes heredada hacia `replay_claims` está oficialmente **finalizada** y todo el código viejo DAO y SQL fue erradicado del proyecto en un solo commit atómico (v4).

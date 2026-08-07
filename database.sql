@@ -23,11 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_active BOOLEAN DEFAULT TRUE
 );
 
-CREATE TABLE IF NOT EXISTS used_key_hashes (
-    key_hash VARCHAR(64) PRIMARY KEY,        -- SHA3-256 clave sesión (anti-reuso)
-    used_at INTEGER NOT NULL,                -- Timestamp redondeado
-    expires_at INTEGER NOT NULL              -- TTL auto-limpieza
-);
+
 
 CREATE TABLE IF NOT EXISTS cloud_backups (
     user_hash VARCHAR(64) NOT NULL,          -- SHA3-256(ID) del propietario

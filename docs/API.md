@@ -1,5 +1,7 @@
 # API Pública - HermesBridge (FFI)
 
+Este documento describe la interfaz nativa del bridge de Hermes. Para la especificación del backend REST/WS de FastAPI, consulte `docs/API_SPEC.md`.
+
 ## Funciones
 
 ### Gestión de Sesión
@@ -27,3 +29,9 @@ fn restore(session: &SessionHandle, backup_data: &[u8]) -> Result<(), CryptoErro
 - Rust devuelve únicamente datos autorizados
 - Zeroize en todas las estructuras sensibles
 - Errores criptográficos → Fail-Closed
+
+---
+
+## Documentación de Backend
+Para integrar con el servidor FastAPI y WebSocket, use la especificación de backend en:
+- `docs/API_SPEC.md`

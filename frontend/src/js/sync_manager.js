@@ -24,6 +24,26 @@ export class SyncManager {
         if (this.ratchets[contactId] && this.ratchets[contactId].isWasmMode) {
             return this.ratchets[contactId];
         }
+
+        // Intentar recuperar el estado serializado del ratchet desde storage cifrado
+        let savedState = null;
+        try {
+            savedState = await this.storage.load(`ratchet_state_${contactId}`);
+        } catch (e) {
+            console.warn(`[SyncManager] Fallo al cargar estado del ratchet de ${contactId} desde almacenamiento:`, e);
+        }
+
+        if (savedState && savedState.serialized) {
+            try {
+                const ratchet = new RealDoubleRatchet(contactId);
+                await ratchet.loadState(savedState.serialized);
+                this.ratchets[contactId] = ratchet;
+                return ratchet;
+            } catch (e) {
+                console.warn(`[SyncManager] Fallo cargando sesión de ratchet serializada para ${contactId}:`, e);
+            }
+        }
+
         const sharedKeyHex = this.contacts.sharedKeys[contactId];
         if (!sharedKeyHex || sharedKeyHex === "0000000000000000000000000000000000000000000000000000000000000000") {
             return null;
@@ -31,7 +51,7 @@ export class SyncManager {
 
         let receiverKyberPk = null;
         try {
-            const receiverHash = await CryptoClient.computeUserHash(contactId);
+            const receiverHash = await CryptoClient.hashClientId(contactId);
             const keysRes = await fetch(`/api/user/${receiverHash}`);
             if (keysRes.ok) {
                 const keys = await keysRes.json();
@@ -50,6 +70,8 @@ export class SyncManager {
             const isAlice = this.currentUserAlias < contactId;
             await ratchet.init(userKeys.kyber_sk, receiverKyberPk, isAlice, sharedKeyHex);
             this.ratchets[contactId] = ratchet;
+            // Guardar el estado inicial inmediatamente
+            await this._saveRatchetStateToVault(contactId, ratchet);
             return ratchet;
         } catch (e) {
             console.warn(`[DoubleRatchet] Failed to initialize for ${contactId}:`, e);
@@ -60,9 +82,10 @@ export class SyncManager {
     async _saveRatchetStateToVault(contactId, ratchet) {
         if (!this.storage || !ratchet) return;
         try {
+            const serialized = await ratchet.exportState();
             await this.storage.save(`ratchet_state_${contactId}`, {
                 contactId: contactId,
-                isWasmMode: ratchet.isWasmMode,
+                serialized: serialized,
                 updatedAt: Date.now()
             });
         } catch (e) {
@@ -160,7 +183,7 @@ export class SyncManager {
             const userKeys = await this.getOrRecoverUserKeys();
             if (!userKeys) return;
 
-            await fetch('/api/login', {
+            const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -170,6 +193,13 @@ export class SyncManager {
                     sphincs_pk_hex: userKeys.sphincs_pk
                 })
             });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.token) {
+                    sessionStorage.setItem('hermes_session_token', data.token);
+                    localStorage.setItem('hermes_session_token', data.token);
+                }
+            }
         } catch (e) {
             console.warn('[SyncManager] Could not re-register keys:', e);
         }
@@ -190,9 +220,15 @@ export class SyncManager {
             const challenge = String(timestamp);
             const signature = await CryptoClient.signChallenge(challenge, userKeys.sphincs_sk);
 
+            const headers = { "Content-Type": "application/json" };
+            const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+            if (token) {
+                headers["Authorization"] = `Bearer ${token}`;
+            }
+
             const res = await fetch("/api/fetch", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: headers,
                 body: JSON.stringify({
                     id_hash: idHash,
                     timestamp: timestamp,
@@ -257,9 +293,15 @@ export class SyncManager {
         logger(`[SyncManager] Flushing ${outbox.length} pending messages from outbox...`);
         for (const msg of [...outbox]) {
             try {
+                const headers = { "Content-Type": "application/json" };
+                const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+                if (token) {
+                    headers["Authorization"] = `Bearer ${token}`;
+                }
+
                 const res = await fetch("/api/relay", {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: headers,
                     body: JSON.stringify({
                         sender_hash: msg.sender_hash,
                         receiver_hash: msg.receiver_hash,
@@ -271,7 +313,11 @@ export class SyncManager {
 
                 if (res.ok) {
                     // Si se envió, eliminar del outbox
-                    await window.state.store.dispatch('OUTBOX_REMOVED', msg);
+                    if (window.hermesStore && typeof window.hermesStore.dispatch === 'function') {
+                        await window.hermesStore.dispatch('OUTBOX_REMOVED', msg);
+                    } else if (window.state && window.state.store && typeof window.state.store.dispatch === 'function') {
+                        await window.state.store.dispatch('OUTBOX_REMOVED', msg);
+                    }
                     if (this.chats && typeof this.chats.updateMessageStatusById === 'function') {
                         await this.chats.updateMessageStatusById(this.storage, msg.id, 'sent');
                     }
@@ -314,6 +360,7 @@ export class SyncManager {
 
             if (data.type === "auth_ok") {
                 logger("WebSocket authenticated successfully.");
+                this.fetchPendingBlobs(); // Traer mensajes pendientes inmediatamente
                 this.flushOutbox(); // Vaciar cola offline al reconectar
                 return;
             }
@@ -836,15 +883,23 @@ export class SyncManager {
         // Send to server blind relay
         let resJson = null;
         try {
+            const headers = { "Content-Type": "application/json" };
+            const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+            if (token) {
+                headers["Authorization"] = `Bearer ${token}`;
+            }
+
             const res = await fetch("/api/relay", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: headers,
                 body: JSON.stringify({
                     sender_hash: senderHash,
                     receiver_hash: receiverHash,
                     encrypted_blob_hex: envelopeHex,
                     session_key_hash: sessionKeyHash,
                     ttl_seconds: window.privacySettings ? window.privacySettings.settings.pendingMessageTTL : 86400
+                    // NOTE: timestamp/signature omitted intentionally — Bearer JWT authenticates the HTTP relay.
+                    // SPHINCS+ signatures live inside the Double Ratchet encrypted envelope, not on the transport layer.
                 })
             });
 
@@ -865,7 +920,11 @@ export class SyncManager {
                     session_key_hash: sessionKeyHash,
                     timestamp: Date.now()
                 };
-                await window.state.store.dispatch('OUTBOX_ADDED', outboxMsg);
+                if (window.hermesStore && typeof window.hermesStore.dispatch === 'function') {
+                    await window.hermesStore.dispatch('OUTBOX_ADDED', outboxMsg);
+                } else if (window.state && window.state.store && typeof window.state.store.dispatch === 'function') {
+                    await window.state.store.dispatch('OUTBOX_ADDED', outboxMsg);
+                }
                 console.info(`[SyncManager] Mensaje no efímero guardado en Outbox para reintento automático.`);
             }
             

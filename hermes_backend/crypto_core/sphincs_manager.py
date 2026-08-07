@@ -28,17 +28,28 @@ class SphincsManager:
     
     @staticmethod
     def verify(message: bytes, signature: bytes, public_key: bytes) -> bool:
-        if len(public_key) != 32:
-            raise ValueError(f"Clave pública SPHINCS+ debe ser 32 bytes. Recibido: {len(public_key)}")
-        if len(signature) == 64:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            try:
-                vk = Ed25519PublicKey.from_public_bytes(public_key)
-                vk.verify(signature, message)
-                return True
-            except Exception as e:
-                logger.warning(f"Ed25519 verification failed: {e}")
-                return False
-        return sphincs_verify(public_key, message, signature)
+        try:
+            if isinstance(public_key, (bytearray, memoryview)):
+                public_key = bytes(public_key)
+            if isinstance(signature, (bytearray, memoryview)):
+                signature = bytes(signature)
+            if len(public_key) != 32:
+                raise ValueError(f"Clave pública SPHINCS+ debe ser 32 bytes. Recibido: {len(public_key)}")
+            if len(signature) == 64:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                try:
+                    vk = Ed25519PublicKey.from_public_bytes(public_key)
+                    vk.verify(signature, message)
+                    return True
+                except Exception as e:
+                    logger.warning(f"Ed25519 verification failed: {e}")
+                    return False
+            return sphincs_verify(public_key, message, signature)
+        except ValueError as e:
+            logger.warning(f"SEC-03: Invalid SPHINCS+ input format: {e}")
+            return False
+        except Exception as e:
+            logger.critical(f"SEC-03: SPHINCS+ verification runtime error: {e}", exc_info=True)
+            return False
 
 

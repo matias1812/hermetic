@@ -26,6 +26,9 @@ use constant_time_eq::constant_time_eq;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha3::{Digest, Sha3_256};
+use sha2::Sha256;
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead as AesGcmAead, KeyInit as AesGcmKeyInit};
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroize;
 
@@ -354,6 +357,111 @@ impl HermesEngineWasm {
     #[wasm_bindgen]
     pub fn health_check(&self) -> bool {
         self.core.health_check().unwrap_or(false)
+    }
+
+    #[wasm_bindgen]
+    pub fn encrypt_legacy_payload(
+        &self,
+        text: &str,
+        session_key_hex: &str,
+        sender_id: &str,
+        receiver_id: &str,
+    ) -> Result<JsValue, JsValue> {
+        let session_key_bytes = session_key_hex.as_bytes();
+        let mut hasher = Sha256::new();
+        hasher.update(session_key_bytes);
+        let aes_key_bytes = hasher.finalize();
+        
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        
+        let mut nonce_bytes = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        
+        let timestamp = (js_sys::Date::now() / 1000.0) as u64;
+        let aad_string = format!("{}:{}:{}", sender_id, receiver_id, timestamp);
+        
+        let payload = aes_gcm::aead::Payload {
+            msg: text.as_bytes(),
+            aad: aad_string.as_bytes(),
+        };
+        
+        let ciphertext = AesGcmAead::encrypt(&cipher, nonce, payload)
+            .map_err(|e| JsValue::from_str(&format!("AES-GCM encryption failed: {:?}", e)))?;
+        
+        let iv_hex = hex::encode(nonce_bytes);
+        let ct_hex = hex::encode(ciphertext);
+        
+        let mut sig_bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut sig_bytes);
+        let sig_hex = hex::encode(sig_bytes);
+        
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("ciphertext_kem"), &JsValue::from_str(""))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("wrapped_otp_key"), &JsValue::from_str(&ct_hex))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("stego_container"), &JsValue::from_str(""))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("audio_spectrum"), &JsValue::null())?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("signature"), &JsValue::from_str(&sig_hex))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("timestamp"), &JsValue::from_f64(timestamp as f64))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("aes_nonce"), &JsValue::from_str(&iv_hex))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("sender_id"), &JsValue::from_str(sender_id))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("receiver_id"), &JsValue::from_str(receiver_id))?;
+        
+        Ok(obj.into())
+    }
+
+    #[wasm_bindgen]
+    pub fn decrypt_legacy_payload(
+        &self,
+        encrypted_package: &JsValue,
+        session_key_hex: &str,
+    ) -> Result<String, JsValue> {
+        let session_key_bytes = session_key_hex.as_bytes();
+        let mut hasher = Sha256::new();
+        hasher.update(session_key_bytes);
+        let aes_key_bytes = hasher.finalize();
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        
+        let get_string = |obj: &JsValue, prop: &str| -> String {
+            js_sys::Reflect::get(obj, &JsValue::from_str(prop))
+                .unwrap_or(JsValue::null())
+                .as_string()
+                .unwrap_or_default()
+        };
+        let get_number = |obj: &JsValue, prop: &str| -> u64 {
+            js_sys::Reflect::get(obj, &JsValue::from_str(prop))
+                .unwrap_or(JsValue::from_f64(0.0))
+                .as_f64()
+                .unwrap_or(0.0) as u64
+        };
+        
+        let iv_hex = get_string(encrypted_package, "aes_nonce");
+        let ct_hex = get_string(encrypted_package, "wrapped_otp_key");
+        let sender_id = get_string(encrypted_package, "sender_id");
+        let receiver_id = get_string(encrypted_package, "receiver_id");
+        let timestamp = get_number(encrypted_package, "timestamp");
+        
+        if iv_hex.is_empty() {
+            return Err(JsValue::from_str("Missing aes_nonce in encrypted package"));
+        }        
+        let iv_bytes = hex::decode(&iv_hex).map_err(|_| JsValue::from_str("Invalid IV hex"))?;
+        let ct_bytes = hex::decode(&ct_hex).map_err(|_| JsValue::from_str("Invalid CT hex"))?;
+        
+        let nonce = Nonce::from_slice(&iv_bytes);
+        
+        let aad_string = format!("{}:{}:{}", sender_id, receiver_id, timestamp);
+        let payload = aes_gcm::aead::Payload {
+            msg: ct_bytes.as_slice(),
+            aad: aad_string.as_bytes(),
+        };
+        
+        let plaintext_bytes = AesGcmAead::decrypt(&cipher, nonce, payload)
+            .map_err(|e| JsValue::from_str(&format!("AES-GCM decryption failed: {:?}", e)))?;
+            
+        String::from_utf8(plaintext_bytes)
+            .map_err(|_| JsValue::from_str("Invalid UTF-8 in decrypted payload"))
     }
 }
 

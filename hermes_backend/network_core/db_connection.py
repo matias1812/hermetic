@@ -57,15 +57,7 @@ class DatabaseConnection:
                 ) ENGINE=InnoDB
             """)
             
-            # Tabla de hashes de llaves usadas (anti-reproducibilidad)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS used_key_hashes (
-                    key_hash VARCHAR(64) PRIMARY KEY,
-                    used_at INTEGER NOT NULL,
-                    expires_at INTEGER NOT NULL
-                ) ENGINE=InnoDB
-            """)
-            
+
             conn.commit()
             cursor.close()
             conn.close()
@@ -94,14 +86,7 @@ class DatabaseConnection:
                 )
             """)
             
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS used_key_hashes (
-                    key_hash TEXT PRIMARY KEY,
-                    used_at INTEGER NOT NULL,
-                    expires_at INTEGER NOT NULL
-                )
-            """)
-            
+
             conn.commit()
             cursor.close()
             conn.close()
@@ -193,66 +178,6 @@ class DatabaseConnection:
         finally:
             conn.close()
 
-    def is_key_used(self, key_hash: str) -> bool:
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            if self.is_mysql:
-                cursor.execute("SELECT 1 FROM used_key_hashes WHERE key_hash = %s", (key_hash,))
-            else:
-                cursor.execute("SELECT 1 FROM used_key_hashes WHERE key_hash = ?", (key_hash,))
-            row = cursor.fetchone()
-            cursor.close()
-            return row is not None
-        except Exception as e:
-            logger.error(f"Error checking key hash: {e}")
-            raise DatabaseError("Key check operation failed")
-        finally:
-            conn.close()
-
-    def mark_key_used(self, key_hash: str, expires_at: int):
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            now = int(time.time())
-            rounded_time = (now // 300) * 300
-            
-            if self.is_mysql:
-                cursor.execute("""
-                    INSERT IGNORE INTO used_key_hashes (key_hash, used_at, expires_at)
-                    VALUES (%s, %s, %s)
-                """, (key_hash, rounded_time, expires_at))
-            else:
-                cursor.execute("""
-                    INSERT OR IGNORE INTO used_key_hashes (key_hash, used_at, expires_at)
-                    VALUES (?, ?, ?)
-                """, (key_hash, rounded_time, expires_at))
-                
-            conn.commit()
-            cursor.close()
-        except Exception as e:
-            logger.error(f"Error marking key hash: {e}")
-            raise DatabaseError("Mark key hash operation failed")
-        finally:
-            conn.close()
-
-    def cleanup_expired_keys(self):
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            now = int(time.time())
-            if self.is_mysql:
-                cursor.execute("DELETE FROM used_key_hashes WHERE expires_at < %s", (now,))
-            else:
-                cursor.execute("DELETE FROM used_key_hashes WHERE expires_at < ?", (now,))
-            conn.commit()
-            cursor.close()
-        except Exception as e:
-            logger.error(f"Error cleaning up key hashes: {e}")
-            raise DatabaseError("Key hash cleanup operation failed")
-        finally:
-            conn.close()
-
     def count_users(self) -> int:
         conn = self._get_connection()
         try:
@@ -267,46 +192,52 @@ class DatabaseConnection:
         finally:
             conn.close()
 
-    def count_used_keys(self) -> int:
+    def count_consumed_replay_claims(self) -> int:
+        """
+        [ACOPLEMENTO DELIBERADO]: Esta función lee directamente de la tabla `replay_claims` 
+        gestionada por el crate `hermes_replay_sql` de Rust. Se realiza de forma excepcional 
+        para alimentar las estadísticas operativas del panel de administración, y asume el esquema interno 
+        (ej. la existencia de la columna `state` = 'consumed').
+        """
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM used_key_hashes")
-            count = cursor.fetchone()[0]
-            cursor.close()
-            return count
+            if self.is_mysql:
+                cursor.execute("SELECT COUNT(*) FROM replay_claims WHERE state = 'consumed'")
+                count = cursor.fetchone()[0]
+                cursor.close()
+                return count
+            else:
+                return 0
         except Exception as e:
-            logger.error(f"Error counting key hashes: {e}")
+            logger.error(f"Error counting consumed replay claims: {e}")
             return -1
         finally:
             conn.close()
 
     def purge_all(self) -> dict:
-        """☢️ Nuclear purge — dev/testing only. Deletes all users and key hashes."""
+        """☢️ Nuclear purge — dev/testing only. Deletes all users and replay_claims."""
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             if self.is_mysql:
                 cursor.execute("SELECT COUNT(*) FROM users")
                 u = cursor.fetchone()[0]
-                cursor.execute("SELECT COUNT(*) FROM used_key_hashes")
+                cursor.execute("SELECT COUNT(*) FROM replay_claims")
                 k = cursor.fetchone()[0]
-                cursor.execute("TRUNCATE TABLE used_key_hashes")
+                cursor.execute("TRUNCATE TABLE replay_claims")
                 cursor.execute("TRUNCATE TABLE users")
             else:
                 cursor.execute("SELECT COUNT(*) FROM users")
                 u = cursor.fetchone()[0]
-                cursor.execute("SELECT COUNT(*) FROM used_key_hashes")
-                k = cursor.fetchone()[0]
-                cursor.execute("DELETE FROM used_key_hashes")
+                k = 0
                 cursor.execute("DELETE FROM users")
             conn.commit()
             cursor.close()
-            logger.warning(f"☢️ Nuclear purge executed: {u} users, {k} key hashes deleted.")
-            return {"users": u, "key_hashes": k}
+            return {"users_purged": u, "replay_claims_purged": k}
         except Exception as e:
-            logger.error(f"Error during purge: {e}")
-            raise DatabaseError(f"Purge operation failed: {e}")
+            logger.error(f"Error purging database: {e}")
+            raise DatabaseError("Purge operation failed")
         finally:
             conn.close()
 

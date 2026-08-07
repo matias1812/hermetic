@@ -4,7 +4,7 @@ from hypothesis import given, settings, strategies as st
 from hermes_backend.crypto_core.kyber_manager import KyberManager
 from hermes_backend.crypto_core.sphincs_manager import SphincsManager
 from hermes_backend.crypto_core.hybrid_encryptor import HybridPQCEncryptor
-from hermes_backend.crypto_core.native_core import HermesNativeCore
+from hermes_backend.crypto_core.native_core import HermesNativeCore, SecurityError as NativeSecurityError
 
 class TestHybridPQCEncryptor(unittest.TestCase):
     """Tests de ida y vuelta con criptografía REAL."""
@@ -121,6 +121,55 @@ class TestHybridPQCEncryptor(unittest.TestCase):
         self.assertEqual(aad1, aad2, "AAD must be deterministic")
         self.assertNotEqual(aad1, aad_diff, "Different receiver must produce different AAD")
         self.assertGreater(len(aad1), 8, "AAD must carry meaningful payload")
+
+    def test_native_core_decrypt_rejects_malformed_sender_public_key(self):
+        session_key_hex = secrets.token_hex(32)
+        envelope = HermesNativeCore.encrypt_envelope(
+            plaintext_hex="48656c6c6f",
+            receiver_kyber_pk_hex=self.receiver_pk.hex(),
+            sender_sphincs_sk_hex=self.sender_sk.hex(),
+            session_key_hex=session_key_hex,
+            sender_id="alice",
+            receiver_id="bob",
+            sender_key_handle="",
+            session_id_str="testsession"
+        )
+
+        with self.assertRaises(NativeSecurityError):
+            HermesNativeCore.decrypt_envelope(
+                envelope,
+                receiver_kyber_sk_hex=self.receiver_sk.hex(),
+                sender_sphincs_pk_hex="zz",
+                session_key_hex=session_key_hex,
+                receiver_key_handle="",
+                session_id_str="testsession",
+                expected_sender_id="alice"
+            )
+
+    def test_native_core_decrypt_rejects_invalid_signature_hex(self):
+        session_key_hex = secrets.token_hex(32)
+        envelope = HermesNativeCore.encrypt_envelope(
+            plaintext_hex="48656c6c6f",
+            receiver_kyber_pk_hex=self.receiver_pk.hex(),
+            sender_sphincs_sk_hex=self.sender_sk.hex(),
+            session_key_hex=session_key_hex,
+            sender_id="alice",
+            receiver_id="bob",
+            sender_key_handle="",
+            session_id_str="testsession"
+        )
+        envelope['signature'] = "zz"
+
+        with self.assertRaises(NativeSecurityError):
+            HermesNativeCore.decrypt_envelope(
+                envelope,
+                receiver_kyber_sk_hex=self.receiver_sk.hex(),
+                sender_sphincs_pk_hex=self.sender_pk.hex(),
+                session_key_hex=session_key_hex,
+                receiver_key_handle="",
+                session_id_str="testsession",
+                expected_sender_id="alice"
+            )
 
     def test_websocket_nonce_validation(self):
         """Test: validate_nonce normaliza y valida nonces."""

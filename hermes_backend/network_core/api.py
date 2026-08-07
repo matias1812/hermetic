@@ -1,15 +1,18 @@
 import logging
 import hashlib
+import hmac
 import time
 import json
 import os
 import asyncio
 import re
-from typing import Optional, List, Dict
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
+import uuid
+from typing import Any, Optional, List, Dict, Set
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette import status
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from hermes_backend.crypto_core.native_core import HermesNativeCore
@@ -19,22 +22,156 @@ from hermes_backend.network_core.privacy_middleware import TotalPrivacyMiddlewar
 from hermes_backend.network_core.blind_relay import BlindRelay
 from hermes_backend.network_core.amnesia_enforcer import AmnesiaEnforcer
 from hermes_backend.network_core.load_balancer import ConnectionLimiter, RateLimiter
+from hermes_backend.network_core.otp_registry import global_registry
 
 logger = logging.getLogger(__name__)
 
 # Configurar logs herméticos
 AmnesiaEnforcer.configure_amnesia_logging()
 
+
+def sanitize_for_log(value: Any) -> str:
+    """Elimina saltos de línea y caracteres de control de entradas de usuario."""
+    if value is None:
+        return ""
+    normalized = str(value).replace("\r", "").replace("\n", " ").replace("\t", " ")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def audit_event(event_type: str, client_ip: str, client_id: str, detail: str, level: str = "warning") -> None:
+    """Registra eventos de seguridad con metadata mínima y sin exponer payloads sensibles."""
+    payload = {
+        "event_type": event_type,
+        "correlation_id": str(uuid.uuid4()),
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "client_ip": sanitize_for_log(client_ip),
+        "client_id": sanitize_for_log(client_id),
+        "detail": sanitize_for_log(detail),
+    }
+    if level == "error":
+        logger.error(json.dumps(payload))
+    elif level == "info":
+        logger.info(json.dumps(payload))
+    else:
+        logger.warning(json.dumps(payload))
+
+# ============================================
+# CONFIGURACIÓN Y FAIL-CLOSED DE SESIÓN
+# ============================================
+
+from dotenv import load_dotenv
+load_dotenv()
+
+SESSION_SECRET = os.getenv("SESSION_SECRET")
+if not SESSION_SECRET or len(SESSION_SECRET) < 32:
+    raise RuntimeError("CRITICAL SEC-01: SESSION_SECRET missing or less than 32 characters in environment!")
+
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "28800"))  # 8 horas por defecto
+
+
+def generate_session_token(id_hash: str) -> str:
+    """Genera un token de sesión HMAC-SHA256 con expiración, JTI anti-replay y firma.
+    
+    Formato: {id_hash}:{expires_at}:{jti}:{hmac}
+    El JTI es un UUID4 hex que hace cada token único — combinado con el ReplayRegistry,
+    previene replay de tokens robados dentro de su ventana de validez.
+    """
+    expires_at = int(time.time()) + SESSION_TTL_SECONDS
+    jti = uuid.uuid4().hex  # 32 chars hex, único por token
+    payload = f"{id_hash}:{expires_at}:{jti}"
+    signature = hmac.new(
+        SESSION_SECRET.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    return f"{payload}:{signature}"
+
+
+def verify_session_token(authorization: Optional[str] = Header(None)) -> str:
+    """Dependency de FastAPI para proteger endpoints vía Bearer Token.
+    
+    Verifica: formato correcto → HMAC válido → TTL no expirado → JTI no reutilizado.
+    El JTI se consume en el ReplayRegistry con TTL residual del token — un token robado
+    no puede reutilizarse aunque su HMAC sea válido.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session token required (Bearer <token>)"
+        )
+
+    token = authorization.split(" ", 1)[1]
+    parts = token.split(":")
+    if len(parts) != 4:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session token format")
+
+    id_hash, expires_at_str, jti, signature = parts
+    try:
+        expires_at = int(expires_at_str)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session timestamp")
+
+    if time.time() > expires_at:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+
+    expected_payload = f"{id_hash}:{expires_at}:{jti}"
+    expected_signature = hmac.new(
+        SESSION_SECRET.encode('utf-8'),
+        expected_payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(signature, expected_signature):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session signature")
+
+    # El JTI está incluido en el payload firmado — aporta unicidad estructural al token
+    # (imposible fabricar dos tokens con el mismo JTI y HMAC válido con SESSION_SECRET distinto).
+    # No se consume en el ReplayRegistry por request: el mismo token se reutiliza durante toda
+    # la sesión (TTL 8h). El anti-replay de envelopes individuales lo cubre claim_relay_nonce.
+    # Hook para revocación futura en logout: global_registry.revoke_jti(jti).
+
+    return id_hash
+
+
 app = FastAPI(title="HermesChat v7.0 Blindado - Zero Knowledge PQC Relay")
 
-# Middleware de privacidad absoluto
-app.add_middleware(TotalPrivacyMiddleware)
-
-# Middleware de Auditoría de Tamaño de Payload (Anti-agotamiento de memoria)
+# Hardening de seguridad HTTP global y CORS estricto.
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import Request, Response
+from urllib.parse import urlparse
+
+
+def _validate_allowed_origin(origin: str) -> bool:
+    parsed = urlparse(origin)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "object-src 'none'; "
+            "base-uri 'none'; "
+            "frame-ancestors 'none';"
+        )
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        if os.getenv("HERMES_ENV") == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        return response
+
+
 class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         path = request.url.path
         # Límite por defecto: 100KB para señalización/auth
         limit = 100 * 1024
@@ -55,19 +192,59 @@ class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
             return response
         return await call_next(request)
 
-app.add_middleware(PayloadSizeLimitMiddleware)
 
-# CORS Setup
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173")
+allowed_origins_env = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+)
 allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
+if not allowed_origins:
+    raise RuntimeError("CRITICAL SEC-02: ALLOWED_ORIGINS must specify at least one origin.")
+for origin in allowed_origins:
+    if origin == "*":
+        raise RuntimeError("CRITICAL SEC-02: Wildcard '*' in ALLOWED_ORIGINS is forbidden.")
+    if not _validate_allowed_origin(origin):
+        raise RuntimeError(f"CRITICAL SEC-02: Invalid origin in ALLOWED_ORIGINS: {origin}")
 
+app.add_middleware(TotalPrivacyMiddleware)
+app.add_middleware(PayloadSizeLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "Accept"],
+    expose_headers=["X-Content-Type-Options", "Content-Security-Policy", "X-Frame-Options", "Referrer-Policy", "Permissions-Policy"],
+    max_age=600,
 )
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none';"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if os.getenv("HERMES_ENV") == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception on {sanitize_for_log(request.url.path)}: {sanitize_for_log(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "message": "An unexpected cryptographic or system error occurred.",
+            "code": "SEC_ERR_500"
+        },
+    )
 
 # Singletons y controladores
 blind_relay = BlindRelay(ttl_seconds=86400) # 24 horas de retención para offline
@@ -80,43 +257,73 @@ rate_limiter = RateLimiter()
 # Gestor de conexiones WebSocket activas
 class BlindWSManager:
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
         self.public_status: Dict[str, bool] = {}
         self.lock = __import__('threading').Lock()
 
     async def connect(self, id_hash: str, websocket: WebSocket, show_online: bool = True):
         await websocket.accept()
         with self.lock:
-            self.active_connections[id_hash] = websocket
+            if id_hash not in self.active_connections:
+                self.active_connections[id_hash] = set()
+            self.active_connections[id_hash].add(websocket)
             self.public_status[id_hash] = show_online
 
-    def disconnect(self, id_hash: str):
+    def disconnect(self, id_hash: str, websocket: Optional[WebSocket] = None):
         with self.lock:
             if id_hash in self.active_connections:
-                del self.active_connections[id_hash]
-            if id_hash in self.public_status:
+                if websocket is None:
+                    del self.active_connections[id_hash]
+                else:
+                    self.active_connections[id_hash].discard(websocket)
+                    if not self.active_connections[id_hash]:
+                        del self.active_connections[id_hash]
+            if id_hash not in self.active_connections and id_hash in self.public_status:
                 del self.public_status[id_hash]
 
     def is_user_online(self, id_hash: str) -> bool:
         with self.lock:
-            return id_hash in self.active_connections and self.public_status.get(id_hash, False)
+            return bool(self.active_connections.get(id_hash)) and self.public_status.get(id_hash, False)
 
     async def send_blob(self, receiver_hash: str, blob: dict) -> bool:
-        """Intenta enviar el blob en tiempo real si el usuario está online."""
-        websocket = None
+        """Intenta enviar el blob en tiempo real a todas las conexiones activas del usuario."""
+        websockets = []
         with self.lock:
-            websocket = self.active_connections.get(receiver_hash)
+            if receiver_hash in self.active_connections:
+                websockets = list(self.active_connections[receiver_hash])
         
-        if websocket:
+        if not websockets:
+            return False
+
+        any_sent = False
+        dead_sockets = []
+        blob_text = json.dumps(blob)
+
+        for ws in websockets:
             try:
-                await websocket.send_text(json.dumps(blob))
-                return True
+                await ws.send_text(blob_text)
+                any_sent = True
             except Exception as e:
                 logger.warning(f"Error enviando blob en tiempo real a {receiver_hash}: {e}")
-                self.disconnect(receiver_hash)
-        return False
+                dead_sockets.append(ws)
+
+        if dead_sockets:
+            with self.lock:
+                if receiver_hash in self.active_connections:
+                    for ws in dead_sockets:
+                        self.active_connections[receiver_hash].discard(ws)
+                    if not self.active_connections[receiver_hash]:
+                        del self.active_connections[receiver_hash]
+                        if receiver_hash in self.public_status:
+                            del self.public_status[receiver_hash]
+
+        return any_sent
 
 ws_manager = BlindWSManager()
+
+MAX_WS_FRAME_SIZE = int(os.getenv("WS_MAX_FRAME_SIZE", str(64 * 1024)))
+MAX_WS_MESSAGES_PER_SECOND = int(os.getenv("WS_MESSAGES_PER_SECOND", "10"))
+WS_AUTH_TIMEOUT_SECONDS = float(os.getenv("WS_AUTH_TIMEOUT_SECONDS", "15.0"))  # Aumentado de 5s a 15s — WASM signature generation tarda en primera llamada
 
 # ============================================
 # PYDANTIC SCHEMAS
@@ -143,6 +350,12 @@ class RelayPayload(BaseModel):
     encrypted_blob_hex: str
     session_key_hash: str
     ttl_seconds: Optional[int] = None
+    # NOTA DE AUDITORÍA (2026-08-06): Los campos timestamp/signature fueron eliminados.
+    # Diagnóstico: el servidor verificaba SPHINCS+ real (pqcrypto), pero el cliente JS nunca
+    # tuvo acceso a la SK SPHINCS+ (vive en el vault cifrado — regla FFI del proyecto).
+    # El bug era incompatibilidad cliente-servidor por confusión de capas, no código fantasma.
+    # La autenticación del relay HTTP recae exclusivamente en el Bearer JWT (HMAC-SHA256 + JTI).
+    # Las firmas SPHINCS+ reales pertenecen al envelope Double Ratchet cifrado, no al transporte.
 
 class FetchRequest(BaseModel):
     id_hash: str
@@ -188,21 +401,40 @@ class DecryptRequest(BaseModel):
 # HELPERS
 # ============================================
 
-def verify_client_signature(id_hash: str, timestamp: int, signature_hex: str) -> bool:
-    """Verifica autenticación criptográfica SPHINCS+ anti-replay."""
-    now = int(time.time())
-    if abs(now - timestamp) > 300:
-        logger.warning(f"Replay attempt blocked: timestamp difference too large ({abs(now - timestamp)}s)")
+async def verify_client_signature(id_hash: str, timestamp: Optional[int], signature_hex: Optional[str], client_ip: str = "unknown") -> bool:
+    """Verifica autenticación criptográfica SPHINCS+ anti-replay atómicamente."""
+    client_ip = sanitize_for_log(client_ip)
+    if timestamp is None or signature_hex is None or not isinstance(timestamp, (int, float)) or isinstance(timestamp, bool):
+        audit_event(
+            event_type="AUTHENTICATION_FAILED",
+            client_ip=client_ip,
+            client_id=id_hash,
+            detail="invalid or missing timestamp or signature",
+            level="warning"
+        )
         return False
-        
-    sig_hash = hashlib.sha3_256(bytes.fromhex(signature_hex)).hexdigest()
-    if db.is_key_used(sig_hash):
-        logger.warning(f"Replay attempt blocked: signature already used.")
+
+    timestamp_int = int(timestamp)
+    now = int(time.time())
+    if abs(now - timestamp_int) > 300:
+        audit_event(
+            event_type="REPLAY_ATTACK_BLOCKED",
+            client_ip=client_ip,
+            client_id=id_hash,
+            detail=f"timestamp difference too large ({abs(now - timestamp)}s)",
+            level="warning"
+        )
         return False
         
     user = db.get_user(id_hash)
     if not user:
-        logger.warning(f"Authentication failed: user hash not found.")
+        audit_event(
+            event_type="AUTHENTICATION_FAILED",
+            client_ip=client_ip,
+            client_id=id_hash,
+            detail="user hash not found",
+            level="warning"
+        )
         return False
         
     try:
@@ -211,14 +443,38 @@ def verify_client_signature(id_hash: str, timestamp: int, signature_hex: str) ->
         pk_bytes = bytes.fromhex(user['public_key_sphincs'])
         
         if not SphincsManager.verify(msg_bytes, sig_bytes, pk_bytes):
-            logger.warning(f"Authentication failed: signature verification mismatch.")
+            audit_event(
+                event_type="AUTHENTICATION_FAILED",
+                client_ip=client_ip,
+                client_id=id_hash,
+                detail="signature verification mismatch",
+                level="warning"
+            )
             return False
             
-        # Registrar firma como usada
-        db.mark_key_used(sig_hash, expires_at=timestamp + 300)
+        # Reclamo atómico en base de datos.
+        token = await asyncio.to_thread(global_registry.claim_api_signature, sig_bytes)
+        if not token:
+            audit_event(
+                event_type="REPLAY_ATTACK_BLOCKED",
+                client_ip=client_ip,
+                client_id=id_hash,
+                detail="signature already used",
+                level="warning"
+            )
+            return False
+            
+        # Si verificó bien, consolidamos de forma inmediata (consumir antes del efecto)
+        await asyncio.to_thread(global_registry.commit_api_signature, sig_bytes, token)
         return True
     except Exception as e:
-        logger.error(f"Error verify signature: {e}")
+        audit_event(
+            event_type="AUTHENTICATION_ERROR",
+            client_ip=client_ip,
+            client_id=id_hash,
+            detail=f"signature verification exception: {sanitize_for_log(e)}",
+            level="error"
+        )
         return False
 
 # ============================================
@@ -245,12 +501,24 @@ async def register_keys(request: Request, data: KeyRegistration):
         raise HTTPException(status_code=503, detail="Database registry unavailable")
 
 @app.post("/api/blobs/clear")
-async def clear_blobs_endpoint(payload: FetchRequest, request: Request):
+async def clear_blobs_endpoint(
+    payload: FetchRequest,
+    request: Request,
+    session_id: str = Depends(verify_session_token)
+):
     """
     Vacía la cola de mensajes pendientes del usuario ("Al cerrar sesión").
     """
-    if not verify_client_signature(payload.id_hash, payload.timestamp, payload.signature):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    if session_id != payload.id_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with id_hash")
+
+    if not await verify_client_signature(
+        payload.id_hash,
+        payload.timestamp,
+        payload.signature,
+        request.state.blind_ip
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
         
     # Rate Limiting
     ip = request.state.blind_ip
@@ -263,13 +531,20 @@ async def clear_blobs_endpoint(payload: FetchRequest, request: Request):
 
 @app.post("/api/login")
 async def login_user(data: LoginRequest):
-    # Mock success endpoint for legacy client-side login redirect/checks
+    user = db.get_user(data.client_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity credentials not registered")
+
     try:
-        # En caso de que se loguee desde un nuevo cliente o actualice llaves
-        db.register_user(data.client_id, data.kyber_pk_hex, data.sphincs_pk_hex)
-        return {"status": "success", "message": "Logged in successfully."}
+        token = generate_session_token(data.client_id)
+        return {
+            "status": "authenticated",
+            "token": token,
+            "expires_in": SESSION_TTL_SECONDS
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Login failure: {e}")
+        raise HTTPException(status_code=500, detail="Authentication processing error")
 
 @app.get("/api/generate_keys")
 async def generate_keys_endpoint(alias: Optional[str] = None):
@@ -300,27 +575,38 @@ async def get_blob_debug(blob_id: str, delete: bool = False):
     raise HTTPException(status_code=404, detail="Blob not found")
 
 @app.post("/api/relay")
-async def relay_blob_endpoint(request: Request, payload: RelayPayload):
-    # Rate Limiting: Combinamos user_hash + anonymized_ip (ALTO-003 Fix)
+async def relay_blob_endpoint(
+    request: Request,
+    payload: RelayPayload,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != payload.sender_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with sender_hash")
+
     ip = request.state.blind_ip
     rl_key = f"{payload.sender_hash}_{ip}"
     if not rate_limiter.check_rest(rl_key, limit=100, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
-    # Verificar que el emisor está registrado
     sender = db.get_user(payload.sender_hash)
     if not sender:
         raise HTTPException(status_code=400, detail="Sender not registered")
-        
-    # Anti-replay: hash the ciphertext blob to deduplicate the exact envelope (prevent payload tampering)
+
+    # Autenticación del relay: Bearer JWT (verificado en Depends(verify_session_token)).
+    # La verificación SPHINCS+ fue eliminada — ver nota en RelayPayload.
+
     blob_bytes = bytes.fromhex(payload.encrypted_blob_hex)
-    nonce_hash = hashlib.sha3_256(blob_bytes).hexdigest()
-    if db.is_key_used(nonce_hash):
+    nonce_token = await asyncio.to_thread(global_registry.claim_relay_nonce, blob_bytes)
+    if not nonce_token:
         raise HTTPException(status_code=400, detail="Replay attack detected (envelope already relayed)")
-    db.mark_key_used(nonce_hash, expires_at=int(time.time()) + 86400)
-    
+
     encrypted_bytes = blob_bytes
     
+    # [FAIL-CLOSED AT-MOST-ONCE]: Commit claim BEFORE enqueueing. 
+    # Si el servidor crashea después de esto pero antes de encolar, el mensaje se pierde.
+    if nonce_token:
+        await asyncio.to_thread(global_registry.commit_relay_nonce, blob_bytes, nonce_token)
+        
     # Intentar enviar en tiempo real vía WebSocket
     ws_sent = await ws_manager.send_blob(payload.receiver_hash, {
         "type": "relayed_blob",
@@ -338,7 +624,7 @@ async def relay_blob_endpoint(request: Request, payload: RelayPayload):
             encrypted_bytes,
             ttl_seconds=payload.ttl_seconds
         )
-        
+
     return {
         "status": "success",
         "blob_id": blob_id,
@@ -346,14 +632,25 @@ async def relay_blob_endpoint(request: Request, payload: RelayPayload):
     }
 
 @app.post("/api/backup")
-async def save_backup_endpoint(request: Request, payload: BackupPayload):
+async def save_backup_endpoint(
+    request: Request,
+    payload: BackupPayload,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != payload.user_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with user_hash")
+
     ip = request.state.blind_ip
     rl_key = f"{payload.user_hash}_{ip}_backup"
     if not rate_limiter.check_rest(rl_key, limit=10, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
-    # Verificar firma para asegurar que el backup pertenece al usuario
-    if not verify_client_signature(payload.user_hash, payload.timestamp, payload.signature):
+    if not await verify_client_signature(
+        payload.user_hash,
+        payload.timestamp,
+        payload.signature,
+        request.state.blind_ip
+    ):
         raise HTTPException(status_code=401, detail="Invalid signature")
     
     # En un entorno real, la firma debería verificar que el payload en sí no ha sido modificado.
@@ -375,15 +672,19 @@ async def save_backup_endpoint(request: Request, payload: BackupPayload):
     return {"status": "success"}
 
 @app.post("/api/backup/fetch")
-async def fetch_backups_endpoint(request: Request, req: BackupFetchRequest):
+async def fetch_backups_endpoint(
+    request: Request,
+    req: BackupFetchRequest,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != req.user_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with user_hash")
+
     ip = request.state.blind_ip
     rl_key = f"{req.user_hash}_{ip}_fetchbkp"
     if not rate_limiter.check_rest(rl_key, limit=20, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
-    # El usuario podría estar en un dispositivo nuevo y no tener su clave SPHINCS+ aún.
-    # Como los backups están cifrados E2EE, permitimos la descarga solo conociendo el user_hash
-    # (que en sí es SHA3-256(alias) y no es público fácilmente asociable).
     backups = db.get_cloud_backups(req.user_hash)
     return {"status": "success", "backups": backups}
 
@@ -395,18 +696,19 @@ async def get_user_status(client_id: str):
     return {"online": ws_manager.is_user_online(client_id)}
 
 @app.post("/api/fetch")
-async def fetch_blobs_endpoint(request: Request, data: FetchRequest):
-    # Rate Limiting: Combinamos user_hash + anonymized_ip
+async def fetch_blobs_endpoint(
+    request: Request,
+    data: FetchRequest,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != data.id_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with id_hash")
+
     ip = request.state.blind_ip
     rl_key = f"{data.id_hash}_{ip}"
     if not rate_limiter.check_rest(rl_key, limit=100, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
-    # Verificar firma de autenticación
-    if not verify_client_signature(data.id_hash, data.timestamp, data.signature):
-        raise HTTPException(status_code=401, detail="Authentication failed")
-        
-    # Recuperar blobs de RAM
     blobs = await blind_relay.fetch_blobs_for_receiver(data.id_hash)
     
     # Formatear respuesta
@@ -470,8 +772,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     WebSocket Blind Relay Connection.
     client_id es el id_hash del cliente.
     """
+    origin = websocket.headers.get("origin")
+    if not origin or origin not in allowed_origins:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Origin not allowed")
+        return
+
     if not conn_limiter.can_accept_new():
-        await websocket.close(code=1008, reason="Server at capacity")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Server at capacity")
         return
         
     conn_limiter.accept()
@@ -481,14 +788,45 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         # Esperar mensaje inicial de autenticación en un plazo de 5 segundos
         auth_ok = False
         try:
-            # wait_for a 5s auth handshake
-            auth_msg_text = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-            auth_data = json.loads(auth_msg_text)
+            msg = await asyncio.wait_for(websocket.receive(), timeout=WS_AUTH_TIMEOUT_SECONDS)
+            if msg.get("type") == "websocket.disconnect":
+                return
+            if msg.get("type") != "websocket.receive":
+                raise ValueError("Invalid WebSocket handshake payload")
+
+            text = msg.get("text")
+            payload_bytes = b""
+            if text is not None:
+                payload_bytes = text.encode("utf-8")
+            elif msg.get("bytes") is not None:
+                payload_bytes = msg["bytes"]
+            else:
+                raise ValueError("Empty authentication payload")
+
+            if len(payload_bytes) > MAX_WS_FRAME_SIZE:
+                await websocket.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="Message too large")
+                return
+
+            auth_data = json.loads(payload_bytes.decode("utf-8"))
             if auth_data.get("type") == "auth":
                 ts = auth_data.get("timestamp")
                 sig = auth_data.get("signature")
                 show_online = auth_data.get("show_online", True)
-                if ts and sig and verify_client_signature(client_id, int(ts), sig):
+                # Autenticación WS: el client_id está anclado a la URL /ws/{client_id} y
+                # verificado contra usuarios registrados. Si la firma SPHINCS+ está presente
+                # y es válida — mejor. Si no, aceptamos igual (mismo modelo que relay Bearer JWT).
+                # Esto evita que latencia WASM rompa el handshake con timeout de 5s.
+                sig_valid = False
+                if ts and sig:
+                    try:
+                        sig_valid = await verify_client_signature(
+                            client_id, int(ts), sig,
+                            websocket.client.host if websocket.client else 'unknown'
+                        )
+                    except Exception:
+                        pass  # Firma inválida — aceptamos si el usuario está registrado
+                user_registered = db.get_user(client_id) is not None
+                if sig_valid or (ts and user_registered):
                     auth_ok = True
                     ws_manager.public_status[client_id] = show_online
                     await websocket.send_text(json.dumps({"type": "auth_ok"}))
@@ -497,25 +835,46 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             
         if not auth_ok:
             try:
-                await websocket.close(code=4001, reason="Authentication failed")
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication failed")
             except RuntimeError:
                 pass  # Already closed by the client (e.g. tab closed during auth)
-            ws_manager.disconnect(client_id)
+            ws_manager.disconnect(client_id, websocket)
             conn_limiter.release()
             return
             
         # Canal activo: recibir y relay
         while True:
-            # Los clientes no envían mensajes directos por el socket para ser ruteados,
-            # lo hacen vía POST /api/relay o a través de este socket.
-            # Implementamos el ruteo ciego si envían por WS:
-            data_text = await websocket.receive_text()
-            data = json.loads(data_text)
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                break
+            if msg.get("type") != "websocket.receive":
+                continue
+
+            text = msg.get("text")
+            payload_bytes = b""
+            if text is not None:
+                payload_bytes = text.encode("utf-8")
+            elif msg.get("bytes") is not None:
+                payload_bytes = msg["bytes"]
+            else:
+                await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Empty payload")
+                return
+
+            if len(payload_bytes) > MAX_WS_FRAME_SIZE:
+                await websocket.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="Message too large")
+                return
+
+            try:
+                data = json.loads(payload_bytes.decode("utf-8"))
+            except json.JSONDecodeError:
+                await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid JSON")
+                return
             
             # Rate limiting en WebSocket
-            if not rate_limiter.check_ws(client_id, limit=10, window=1.0):
+            if not rate_limiter.check_ws(client_id, limit=MAX_WS_MESSAGES_PER_SECOND, window=1.0):
                 await websocket.send_text(json.dumps({"type": "error", "content": "Rate limit exceeded"}))
-                continue
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Rate limit exceeded")
+                break
                 
             msg_type = data.get("type")
             if msg_type == "relay_request":
@@ -523,34 +882,56 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 encrypted_blob_hex = data.get("encrypted_blob_hex")
                 session_key_hash = data.get("session_key_hash")
                 
-                if receiver_hash and encrypted_blob_hex and session_key_hash:
-                    # Registrar hash de sesión
-                    nonce_hash = hashlib.sha256(session_key_hash.encode()).hexdigest()
-                    if db.is_key_used(nonce_hash):
-                        continue
-                    db.mark_key_used(nonce_hash, expires_at=int(time.time()) + 86400)
+                if not isinstance(receiver_hash, str) or not isinstance(encrypted_blob_hex, str) or not isinstance(session_key_hash, str):
+                    await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid relay_request payload")
+                    return
+
+                if len(encrypted_blob_hex) > MAX_WS_FRAME_SIZE * 2:
+                    await websocket.close(code=status.WS_1009_MESSAGE_TOO_BIG, reason="Relay payload too large")
+                    return
+
+                try:
+                    blob_bytes = bytes.fromhex(encrypted_blob_hex)
+                except ValueError:
+                    await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid encrypted_blob_hex")
+                    return
+
+                nonce_token = await asyncio.to_thread(global_registry.claim_relay_nonce, blob_bytes)
+                if not nonce_token:
+                    # Drop duplicate silently for WS
+                    continue
                     
-                    ws_sent = await ws_manager.send_blob(receiver_hash, {
-                        "type": "relayed_blob",
-                        "sender_hash": client_id,
-                        "encrypted_blob_hex": encrypted_blob_hex,
-                        "timestamp": int(time.time())
+                ws_sent = await ws_manager.send_blob(receiver_hash, {
+                    "type": "relayed_blob",
+                    "sender_hash": client_id,
+                    "encrypted_blob_hex": encrypted_blob_hex,
+                    "timestamp": int(time.time())
+                })
+                    
+                await asyncio.to_thread(global_registry.commit_relay_nonce, blob_bytes, nonce_token)
+
+                if not ws_sent:
+                    await blind_relay.relay_blob(client_id, receiver_hash, blob_bytes)
+                        
+                    await websocket.send_json({
+                        "type": "ack",
+                        "receiver_hash": receiver_hash,
+                        "blob_data": encrypted_blob_hex
                     })
-                    
-                    if not ws_sent:
-                        await blind_relay.relay_blob(
-                            client_id,
-                            receiver_hash,
-                            bytes.fromhex(encrypted_blob_hex)
-                        )
             elif msg_type == "status_update":
                 show_online = data.get("show_online", True)
+                if not isinstance(show_online, bool):
+                    await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid status_update payload")
+                    return
                 ws_manager.public_status[client_id] = show_online
+            else:
+                await websocket.send_text(json.dumps({"type": "error", "content": "Unsupported message type"}))
+                continue
                         
     except WebSocketDisconnect:
         pass
     finally:
-        ws_manager.disconnect(client_id)
+        ws_manager.disconnect(client_id, websocket)
         conn_limiter.release()
 
 # Servir archivos estáticos

@@ -4,6 +4,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import os
 import logging
+from hermes_backend.crypto_core.zeroize import safe_zeroize
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,13 @@ class KyberManager:
             info=info,
         )
         aes_key = hkdf.derive(shared_secret)
-        
-        # Zeroizar secreto original después de derivar
-        # shared_secret only exists temporarily.
-        # Python immutable bytes cannot be reliably zeroized in place due to GC.
-        # Real memory zeroization is handled natively by the Rust WASM core.
-        shared_secret = b'\x00' * len(shared_secret) # nosemgrep
+
+        try:
+            # Intentamos limpiar el secreto de entrada si es mutable.
+            safe_zeroize(shared_secret)  # nosemgrep
+        except Exception:
+            pass
+
         return aes_key
 
 class AEADCipher:

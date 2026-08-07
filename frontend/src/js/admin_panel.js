@@ -105,7 +105,7 @@ export class AdminPanel {
                 this.stats = {
                     total_users: data.users_registered ?? 1,
                     online_users: data.online_users ?? 1,
-                    used_key_hashes: data.used_key_hashes ?? 0,
+                    consumed_replay_claims: data.consumed_replay_claims ?? 0,
                     engine: data.engine ?? 'SQLite',
                     traffic_last_24h: [14, 22, 10, 18, 25, 30, 42, 35, 28, 45, 52, 60]
                 };
@@ -123,7 +123,7 @@ export class AdminPanel {
 
         const totalUsers = this.stats.total_users || 1;
         const onlineUsers = this.stats.online_users || 1;
-        const keysUsed = this.stats.used_key_hashes || (state.contacts?.contacts?.length || 0) + 1;
+        const keysUsed = this.stats.consumed_replay_claims || (state.contacts?.contacts?.length || 0) + 1;
         const groupsCount = state.groups?.userGroups?.length || 0;
 
         container.innerHTML = `
@@ -153,7 +153,7 @@ export class AdminPanel {
                     </div>
                     <div class="bg-black/60 p-2 border border-darkGrey/80 rounded flex flex-col justify-center">
                         <span class="font-bold text-cyan-400 text-base">${keysUsed}</span>
-                        <span class="text-[9px] text-gray-400 uppercase">Llaves E2E en DB</span>
+                        <span class="text-[9px] text-gray-400 uppercase">Replay Claims en DB</span>
                     </div>
                 </div>
 

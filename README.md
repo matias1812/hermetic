@@ -1,58 +1,57 @@
-# 🔐 HermesChat vFinal — Sistema de Mensajería Híbrida PQC (Post-Cuántica) y Relevo Ciego
+# 🔐 HermesChat vFinal — Backend Blind Relay con PQC y Hardened MVP Candidate
 
-## ⚠️ DECLARACIÓN TÉCNICA VERIFICABLE (AUDITADA)
+## 🧾 Estado Actual
+**MVP Hardened / Candidate** — el backend FastAPI está endurecido con protección de API, WebSockets, validación de origen, límites de trama y sanitización de logs.
 
-HermesChat es un sistema de cifrado extremo a extremo (E2E) con arquitectura de **Relevo Ciego (Blind Relay)** y un núcleo criptográfico unificado en **Rust compilado a WebAssembly (WASM)**.
+## 🚀 Resumen del Proyecto
+HermesChat es un servidor de relevo ciego que enruta mensajes cifrados de extremo a extremo sin almacenar claves privadas. El backend opera como un puente seguro para paquetes cifrados y firmas PQC, mientras la lógica de sesión y de cifrado se mantiene en el cliente nativo/FFI.
 
-Tras la última auditoría técnica y consolidación arquitectónica, HermesChat **ofrece Criptografía Híbrida Post-Cuántica (PQC)** verificable:
-- **Híbrido Clásico/PQC**: Combina **X25519 (ECDH)** con **ML-KEM-768 (FIPS 203)** para la derivación de secretos maestros en el protocolo X3DH.
-- **Firmas Digitales**: **Ed25519** para autenticación irrefutable de pre-claves públicas.
-- **Double Ratchet (Trinquete Doble)**: Para Perfect Forward Secrecy (PFS) y post-compromise security iterado en Rust.
-- **AES-256-GCM / XChaCha20**: Cifrado autenticado de mensajes y protección anti-replay.
-- **Aislamiento en Memoria FFI**: Motor WASM Nativo (`hermes_crypto_wasm`) con `ZeroizeOnDrop` que destruye variables temporales, prohibiendo fugas al Garbage Collector de JavaScript.
-- **Evidencia Empírica**: La arquitectura supera estrictas pruebas de caos (corrupción simulada) y genera logs de auditoría estilo NIST integrados en el pipeline de NodeJS/WASM.
+## ✅ Características Clave
+- Post-cuántico: **Kyber ML-KEM-1024** para intercambio de clave híbrido.
+- Firmas: **SPHINCS+** para autenticación de paquetes.
+- AEAD: **AES-256-GCM** para confidencialidad e integridad.
+- Fail-Closed: fallos criptográficos abortan la operación.
+- Zeroization: `safe_zeroize()` limpia buffers sensibles en Python.
+- WebSockets hardened: origen validado, autenticación en 5s, límite de 64KB y 10 mensajes/s.
+- Logging seguro: sanitización CRLF y redacción de secretos.
 
----
+## 📌 Variables de Entorno Requeridas
+| Variable | Descripción | Requerido |
+|---|---|:---:|
+| `SESSION_SECRET` | Clave HMAC para tokens de sesión. Debe ser al menos 32 caracteres. | Sí |
+| `ALLOWED_ORIGINS` | Lista separada por comas de orígenes HTTP/HTTPS permitidos. `*` no está permitido. | Sí |
+| `HERMES_ENV` | `production` para habilitar HSTS y controles de seguridad estrictos. | No |
+| `MAX_WS_CONNECTIONS` | Límite de conexiones WS simultáneas (default `1000`). | No |
+| `WS_MAX_FRAME_SIZE` | Límite de trama WS en bytes (default `65536`). | No |
+| `WS_MESSAGES_PER_SECOND` | Límite de mensajes WS por segundo (default `10`). | No |
 
-## 🏛️ Arquitectura de Seguridad (Auditada y Congelada)
-
-La arquitectura divide estrictamente los contextos de ejecución:
-
-| Capa | Implementación Tecnológica | Política de Aseguramiento |
-|---|---|---|
-| **Motor Criptográfico E2E (Rust / WASM)** | Crate `hermes_crypto_wasm` compilado a WebAssembly. Encapsula toda la lógica de X3DH, ML-KEM y Double Ratchet. | **Inviolable:** Los secretos criptográficos (claves privadas, secretos compartidos) **nunca** se envían al entorno JavaScript. |
-| **Puente Transaccional (FFI)** | `crypto_wasm_bridge.js` (HermesBridge). | **Fail-Closed:** Expone métodos transaccionales puros. Si la decapsulación PQC o firma falla, la sesión es abortada silenciosamente. |
-| **Servidor de Relevo (Blind Relay)** | FastAPI + WebSockets apátridas (`api.py`). | El servidor enruta bytes hexadecimales opacos. No guarda historiales en disco ni posee llaves. |
-
----
-
-## 🛡️ Propiedades Criptográficas Híbridas Reales
-
-1. **Resistencia SNDL (Store-Now-Decrypt-Later)**: Al integrar ML-KEM-768 en la KDF (Key Derivation Function) inicial mediante HKDF-SHA256, los atacantes cuánticos futuros no podrán derivar la llave raíz del Double Ratchet aunque rompan la curva X25519.
-2. **Forward Secrecy**: El protocolo Double Ratchet rota las claves simétricas en cada ciclo de mensaje.
-3. **Resistencia a Manipulación (MITM)**: AEAD previene alteraciones en tránsito.
-
----
-
-## 📚 Documentación Técnica Actualizada
-
-- [docs/SECURITY.md](docs/SECURITY.md): Política de seguridad híbrida.
-- [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md): Modelo de amenazas cuánticas y clásicas.
-- [docs/CRYPTO.md](docs/CRYPTO.md): Detalles criptográficos reales (ML-KEM-768, X25519, Ed25519).
-- [docs/evidence/](docs/evidence/): Logs empíricos de auditoría técnica PQC.
-
----
-
-## 🛠️ Ejecución Local
-
+## 🧪 Instalación y Ejecución
 ```bash
-# 1. Instalar dependencias
 pip install -r requirements.txt
 
-# 2. Iniciar servidor backend
+# Opcional: si compilas el puente Rust/WASM
+pip install maturin
+cd hermes_crypto_wasm
+maturin develop
+
+# Iniciar servidor con preflight audit
 python main.py
 
-# 3. Iniciar entorno de desarrollo Frontend (Vite)
-cd frontend
-npm run dev
+# O ejecutar directamente el app FastAPI
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
+
+## 📁 Documentación Clave
+- `docs/ARCHITECTURE.md` — arquitectura del sistema y flujo de envelope PQC.
+- `docs/SECURITY.md` — matriz de controles SEC-01 a SEC-07 y políticas de fail-closed.
+- `docs/API_SPEC.md` — especificación REST/WS de backend para integradores.
+- `docs/EVIDENCE_LOGS.md` — evidencia de compilación, pruebas y logs sanitizados.
+
+## 🧾 Pruebas y Evidencia
+```bash
+python -m py_compile main.py hermes_backend/network_core/api.py hermes_backend/crypto_core/native_core.py hermes_backend/crypto_core/hybrid_encryptor.py
+python -m pytest tests/ -q
+```
+
+## 📌 Nota de Estado
+La implementación actual documenta un backend blind relay endurecido. La ruta nativa Rust/WASM es la intención de diseño; cuando no está disponible, el servidor puede ejecutar un fallback de backend Python `pqcrypto`.

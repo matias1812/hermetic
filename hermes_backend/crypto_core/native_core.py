@@ -4,6 +4,7 @@ import time
 from hermes_backend.crypto_core.kyber_manager import KyberManager, AEADCipher, SecurityError
 from hermes_backend.crypto_core.sphincs_manager import SphincsManager
 from hermes_backend.crypto_core.hybrid_encryptor import HybridPQCEncryptor
+from hermes_backend.crypto_core.zeroize import safe_zeroize
 from hermes_backend.stego_engine.csprng_disperser import CSPRNGDisperser
 from hermes_backend.stego_engine.geometric_container import GeometricStegoContainer
 
@@ -113,7 +114,10 @@ class HermesNativeCore:
     def _get_registry(cls):
         if cls._otp_registry is None:
             from hermes_backend.network_core.otp_registry import OTPKeyRegistry
-            cls._otp_registry = OTPKeyRegistry()
+            if isinstance(OTPKeyRegistry, type):
+                cls._otp_registry = OTPKeyRegistry()
+            else:
+                cls._otp_registry = OTPKeyRegistry
         return cls._otp_registry
 
     @staticmethod
@@ -246,57 +250,77 @@ class HermesNativeCore:
         sender_key_handle: str = "",
         session_id_str: str = ""
     ) -> dict:
-        pt = bytes.fromhex(plaintext_hex)
-        sender_sphincs_sk = bytes.fromhex(sender_sphincs_sk_hex)
+        pt = bytearray(bytes.fromhex(plaintext_hex))
+        sender_sphincs_sk = bytearray(bytes.fromhex(sender_sphincs_sk_hex))
         session_key = bytearray(bytes.fromhex(session_key_hex))
+        receiver_kyber_pk = None
         timestamp_int = int(time.time())
 
-        # Build AAD: sender_id + receiver_id + timestamp
-        aad = HermesNativeCore._build_aad(sender_id, receiver_id, timestamp_int)
+        try:
+            # Build AAD: sender_id + receiver_id + timestamp
+            aad = HermesNativeCore._build_aad(sender_id, receiver_id, timestamp_int)
 
-        if not receiver_kyber_pk_hex or receiver_kyber_pk_hex == "none":
-            raise ValueError("receiver_kyber_pk_hex is required for ML-KEM-1024 envelopes")
-            
-        if NATIVE_AVAILABLE:
-            encrypted = hermes_ffi.encapsulate_and_encrypt_native(
-                receiver_kyber_pk_hex,
-                sender_key_handle,
-                session_id_str,
-                pt,
-                aad
+            if not receiver_kyber_pk_hex or receiver_kyber_pk_hex == "none":
+                raise ValueError("receiver_kyber_pk_hex is required for ML-KEM-1024 envelopes")
+
+            if NATIVE_AVAILABLE:
+                encrypted = hermes_ffi.encapsulate_and_encrypt_native(
+                    receiver_kyber_pk_hex,
+                    sender_key_handle,
+                    session_id_str,
+                    bytes(pt),
+                    aad
+                )
+            else:
+                receiver_kyber_pk = bytearray(bytes.fromhex(receiver_kyber_pk_hex))
+                encrypted = HybridPQCEncryptor.encrypt(
+                    bytes(pt),
+                    bytes(receiver_kyber_pk),
+                    bytes(sender_sphincs_sk),
+                    associated_data=aad
+                )
+
+            # SPHINCS+ signature happens here, in Python
+            message_to_sign = HermesNativeCore.canonical_signed_payload(
+                "ML-KEM-1024", "AES-256-GCM", "SLH-DSA-SHA2-128f",
+                sender_id, receiver_id, timestamp_int,
+                encrypted['kyber_ciphertext'], encrypted['aes_nonce'], encrypted['encrypted_message']
             )
-        else:
-            receiver_kyber_pk = bytes.fromhex(receiver_kyber_pk_hex)
-            encrypted = HybridPQCEncryptor.encrypt(
-                pt,
-                receiver_kyber_pk,
-                sender_sphincs_sk, # Only used in pure-python path to do both
-                associated_data=aad
-            )
+            signature = SphincsManager.sign(message_to_sign, bytes(sender_sphincs_sk))
 
-        # SPHINCS+ signature happens here, in Python
-        message_to_sign = HermesNativeCore.canonical_signed_payload(
-            "ML-KEM-1024", "AES-256-GCM", "SLH-DSA-SHA2-128f",
-            sender_id, receiver_id, timestamp_int,
-            encrypted['kyber_ciphertext'], encrypted['aes_nonce'], encrypted['encrypted_message']
-        )
-        signature = SphincsManager.sign(message_to_sign, sender_sphincs_sk)
-            
-        kem_alg_out = "ML-KEM-1024"
-        aead_alg_out = "AES-256-GCM"
-        sig_alg_out = "SLH-DSA-SHA2-128f"
-            
-        disperser = CSPRNGDisperser(session_key)
-        whitened_payload = disperser.whiten_data(bytearray(encrypted['encrypted_message']))
-            
-        kyber_ciphertext_hex = encrypted['kyber_ciphertext'].hex()
-        encrypted_message_hex = encrypted['encrypted_message'].hex()
-        aes_nonce_hex = encrypted['aes_nonce'].hex()
+            kem_alg_out = "ML-KEM-1024"
+            aead_alg_out = "AES-256-GCM"
+            sig_alg_out = "SLH-DSA-SHA2-128f"
 
-        stego_svg = GeometricStegoContainer.embed_payload(whitened_payload)
+            disperser = CSPRNGDisperser(session_key)
+            whitened_payload = disperser.whiten_data(bytearray(encrypted['encrypted_message']))
 
-        for i in range(len(session_key)):
-            session_key[i] = 0
+            kyber_ciphertext_hex = encrypted['kyber_ciphertext'].hex()
+            encrypted_message_hex = encrypted['encrypted_message'].hex()
+            aes_nonce_hex = encrypted['aes_nonce'].hex()
+
+            stego_svg = GeometricStegoContainer.embed_payload(whitened_payload)
+
+        finally:
+            safe_zeroize(pt)
+            safe_zeroize(sender_sphincs_sk)
+            safe_zeroize(session_key)
+            safe_zeroize(receiver_kyber_pk)
+
+        return {
+            "ciphertext_kem": kyber_ciphertext_hex,
+            "wrapped_otp_key": encrypted_message_hex,
+            "stego_container": stego_svg,
+            "audio_spectrum": None,
+            "signature": signature.hex() if isinstance(signature, bytes) else signature,
+            "timestamp": timestamp_int,
+            "aes_nonce": aes_nonce_hex,
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
+            "kem_algorithm": kem_alg_out,
+            "aead_algorithm": aead_alg_out,
+            "signature_algorithm": sig_alg_out
+        }
 
         return {
             "ciphertext_kem": kyber_ciphertext_hex,
@@ -323,140 +347,164 @@ class HermesNativeCore:
         session_id_str: str = "",
         expected_sender_id: str = ""
     ) -> bytearray:
-        sender_sphincs_pk = bytes.fromhex(sender_sphincs_pk_hex)
-        session_key = bytearray(bytes.fromhex(session_key_hex))
-
-        sender_id   = package.get('sender_id', '')
-        receiver_id = package.get('receiver_id', '')
-        timestamp_int = int(package.get('timestamp', 0))
-        
-        # 0. Policy Validation
-        EXPECTED_KEM = "ML-KEM-1024" if package.get('ciphertext_kem') else "None"
-        kem_alg = package.get('kem_algorithm', EXPECTED_KEM)
-        if kem_alg != EXPECTED_KEM:
-            raise UnsupportedAlgorithmError(f"Unsupported KEM algorithm: {kem_alg}")
-            
-        aead_alg = package.get('aead_algorithm', "AES-256-GCM")
-        if aead_alg != "AES-256-GCM":
-            raise UnsupportedAlgorithmError(f"Unsupported AEAD algorithm: {aead_alg}")
-            
-        sig_alg = package.get('signature_algorithm', "SLH-DSA-SHA2-128f")
-        if sig_alg != "SLH-DSA-SHA2-128f":
-            raise UnsupportedAlgorithmError(f"Unsupported signature algorithm: {sig_alg}")
-        
-        # 2. Identidad: Verificación de Spoofing
-        if not isinstance(expected_sender_id, str) or not expected_sender_id:
-            raise SecurityError("expected_sender_id is required")
-
-        # Resolving via trust store is pending (phase 2), but we simulate checking the required ID
-        # trusted_public_key = trust_store.resolve_sphincs_key(expected_sender_id)
-        
-        import hmac
-        if not hmac.compare_digest(sender_id, expected_sender_id):
-            raise SecurityError("Identity spoofing detected")
-
-        # 1. Frescura: Chequeo de timestamp asimétrico (UTC)
-        import datetime
-        now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-        if timestamp_int < now - 300 or timestamp_int > now + 60:
-            raise SecurityError(f"Timestamp outside of freshness window: {timestamp_int} (now: {now})")
-
-        # 2. Identidad: AAD building (sender_id and receiver_id implicitly bound via public key caller check)
-        aad = HermesNativeCore._build_aad(sender_id, receiver_id, timestamp_int)
-
-        whitened_payload = GeometricStegoContainer.extract_payload(package['stego_container'])
-
-        disperser = CSPRNGDisperser(session_key)
-        encrypted_message = disperser.dewhiten_data(whitened_payload)
-
-        ciphertext_kem_hex = package.get('ciphertext_kem', '')
-        aes_nonce_hex = package.get('aes_nonce', '')
-        if not aes_nonce_hex:
-            raise SecurityError("Missing aes_nonce in encrypted package")
-        aes_nonce_bytes = bytes.fromhex(aes_nonce_hex)
-        signature_bytes = bytes.fromhex(package['signature'])
-
-        # 3. Firma: Validación SPHINCS+ usando canonical_signed_payload
-        AES_GCM_NONCE_BYTES = 12
-        ML_KEM_1024_CIPHERTEXT_BYTES = 1568
-        
-        if len(aes_nonce_bytes) != AES_GCM_NONCE_BYTES:
-            raise SecurityError(f"AES-GCM nonce must be exactly {AES_GCM_NONCE_BYTES} bytes")
-            
-        ciphertext_kem_bytes = bytes.fromhex(ciphertext_kem_hex) if ciphertext_kem_hex else b""
-        
-        if kem_alg != "ML-KEM-1024":
-            raise UnsupportedAlgorithmError("Only ML-KEM-1024 is allowed in this envelope version")
-            
-        if len(ciphertext_kem_bytes) != ML_KEM_1024_CIPHERTEXT_BYTES:
-            raise SecurityError(f"ML-KEM-1024 ciphertext must be exactly {ML_KEM_1024_CIPHERTEXT_BYTES} bytes")
-        message_to_verify = HermesNativeCore.canonical_signed_payload(
-            kem_alg, aead_alg, sig_alg,
-            sender_id, receiver_id, timestamp_int,
-            ciphertext_kem_bytes, aes_nonce_bytes, bytes(encrypted_message)
-        )
-            
-        if not SphincsManager.verify(message_to_verify, signature_bytes, sender_sphincs_pk):
-            raise InvalidEnvelopeError("Firma SPHINCS+ inválida - mensaje rechazado")
-
-        # 4. Consulta Deduplicación: Claim atómico para prevenir TOCTOU
-        registry = HermesNativeCore._get_registry()
-        claim_token = registry.claim(signature_bytes)
-        if not claim_token:
-            raise SecurityError("Replay attack detected (signature already processed)")
+        sender_sphincs_pk = None
+        receiver_kyber_sk = None
+        session_key = None
+        shared_secret = None
+        aes_key = None
+        registry = None
+        claim_token = None
+        plaintext = None
+        signature_bytes = None
+        ciphertext_kem_bytes = None
 
         try:
-            # 5. Criptografía: Descifrado
-            if not ciphertext_kem_hex:
-                aes_key = KyberManager.derive_aes_key(bytes(session_key))
-                try:
-                    plaintext = AEADCipher.decrypt(encrypted_message, aes_key, aes_nonce_bytes, aad)
-                except Exception as e:
-                    raise InvalidCiphertextError(str(e))
-            else:
-                if NATIVE_AVAILABLE:
+            sender_sphincs_pk = bytearray(bytes.fromhex(sender_sphincs_pk_hex))
+            session_key = bytearray(bytes.fromhex(session_key_hex))
+
+            sender_id = package.get('sender_id', '')
+            receiver_id = package.get('receiver_id', '')
+            timestamp_int = int(package.get('timestamp', 0))
+
+            # 0. Policy Validation
+            EXPECTED_KEM = "ML-KEM-1024" if package.get('ciphertext_kem') else "None"
+            kem_alg = package.get('kem_algorithm', EXPECTED_KEM)
+            if kem_alg != EXPECTED_KEM:
+                raise UnsupportedAlgorithmError(f"Unsupported KEM algorithm: {kem_alg}")
+
+            aead_alg = package.get('aead_algorithm', "AES-256-GCM")
+            if aead_alg != "AES-256-GCM":
+                raise UnsupportedAlgorithmError(f"Unsupported AEAD algorithm: {aead_alg}")
+
+            sig_alg = package.get('signature_algorithm', "SLH-DSA-SHA2-128f")
+            if sig_alg != "SLH-DSA-SHA2-128f":
+                raise UnsupportedAlgorithmError(f"Unsupported signature algorithm: {sig_alg}")
+
+            # 2. Identidad: Verificación de Spoofing
+            if not isinstance(expected_sender_id, str) or not expected_sender_id:
+                raise SecurityError("expected_sender_id is required")
+
+            import hmac
+            if not hmac.compare_digest(sender_id, expected_sender_id):
+                raise SecurityError("Identity spoofing detected")
+
+            # 1. Frescura: Chequeo de timestamp asimétrico (UTC)
+            import datetime
+            now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+            if timestamp_int < now - 300 or timestamp_int > now + 60:
+                raise SecurityError(f"Timestamp outside of freshness window: {timestamp_int} (now: {now})")
+
+            aad = HermesNativeCore._build_aad(sender_id, receiver_id, timestamp_int)
+
+            whitened_payload = GeometricStegoContainer.extract_payload(package['stego_container'])
+
+            disperser = CSPRNGDisperser(session_key)
+            encrypted_message = disperser.dewhiten_data(whitened_payload)
+
+            ciphertext_kem_hex = package.get('ciphertext_kem', '')
+            aes_nonce_hex = package.get('aes_nonce', '')
+            if not aes_nonce_hex:
+                raise SecurityError("Missing aes_nonce in encrypted package")
+            aes_nonce_bytes = bytes.fromhex(aes_nonce_hex)
+            signature_bytes = bytearray(bytes.fromhex(package['signature']))
+
+            # 3. Firma: Validación SPHINCS+ usando canonical_signed_payload
+            AES_GCM_NONCE_BYTES = 12
+            ML_KEM_1024_CIPHERTEXT_BYTES = 1568
+
+            if len(aes_nonce_bytes) != AES_GCM_NONCE_BYTES:
+                raise SecurityError(f"AES-GCM nonce must be exactly {AES_GCM_NONCE_BYTES} bytes")
+
+            ciphertext_kem_bytes = bytearray(bytes.fromhex(ciphertext_kem_hex)) if ciphertext_kem_hex else bytearray()
+
+            if kem_alg != "ML-KEM-1024":
+                raise UnsupportedAlgorithmError("Only ML-KEM-1024 is allowed in this envelope version")
+
+            if len(ciphertext_kem_bytes) != ML_KEM_1024_CIPHERTEXT_BYTES:
+                raise SecurityError(f"ML-KEM-1024 ciphertext must be exactly {ML_KEM_1024_CIPHERTEXT_BYTES} bytes")
+            message_to_verify = HermesNativeCore.canonical_signed_payload(
+                kem_alg, aead_alg, sig_alg,
+                sender_id, receiver_id, timestamp_int,
+                bytes(ciphertext_kem_bytes), aes_nonce_bytes, bytes(encrypted_message)
+            )
+
+            if not SphincsManager.verify(message_to_verify, signature_bytes, sender_sphincs_pk):
+                raise InvalidEnvelopeError("Firma SPHINCS+ inválida - mensaje rechazado")
+
+            registry = HermesNativeCore._get_registry()
+            claim_token = registry.claim(signature_bytes)
+            if not claim_token:
+                raise SecurityError("Replay attack detected (signature already processed)")
+
+            try:
+                # 5. Criptografía: Descifrado
+                if not ciphertext_kem_hex:
+                    aes_key = bytearray(KyberManager.derive_aes_key(bytes(session_key)))
                     try:
-                        plaintext = hermes_ffi.decrypt_and_decapsulate_native(
-                            receiver_key_handle,
-                            session_id_str,
-                            ciphertext_kem_hex,
-                            aes_nonce_hex,
-                            encrypted_message.hex(),
-                            aad
-                        )
+                        plaintext = AEADCipher.decrypt(encrypted_message, bytes(aes_key), aes_nonce_bytes, aad)
                     except Exception as e:
-                        # FFI will raise PyValueError for deterministic errors
-                        if "ValueError" in str(type(e)):
-                            raise InvalidCiphertextError(str(e))
-                        raise TransientCryptoBackendError(str(e))
+                        raise InvalidCiphertextError(str(e)) from None
                 else:
-                    receiver_kyber_sk = bytes.fromhex(receiver_kyber_sk_hex)
-                    try:
-                        shared_secret = KyberManager.decapsulate(ciphertext_kem_bytes, receiver_kyber_sk)
-                        aes_key = KyberManager.derive_aes_key(shared_secret)
-                        plaintext = AEADCipher.decrypt(bytes(encrypted_message), aes_key, aes_nonce_bytes, aad)
-                    except Exception as e:
-                        raise InvalidCiphertextError(str(e))
+                    if NATIVE_AVAILABLE:
+                        try:
+                            plaintext = hermes_ffi.decrypt_and_decapsulate_native(
+                                receiver_key_handle,
+                                session_id_str,
+                                ciphertext_kem_hex,
+                                aes_nonce_hex,
+                                encrypted_message.hex(),
+                                aad
+                            )
+                        except (ValueError, TypeError) as e:
+                            raise InvalidCiphertextError(str(e)) from None
+                        except Exception as e:
+                            raise TransientCryptoBackendError(str(e)) from None
+                    else:
+                        receiver_kyber_sk = bytearray(bytes.fromhex(receiver_kyber_sk_hex))
+                        try:
+                            shared_secret = bytearray(KyberManager.decapsulate(bytes(ciphertext_kem_bytes), bytes(receiver_kyber_sk)))
+                            aes_key = bytearray(KyberManager.derive_aes_key(shared_secret))
+                            plaintext = AEADCipher.decrypt(bytes(encrypted_message), bytes(aes_key), aes_nonce_bytes, aad)
+                        except (ValueError, TypeError) as e:
+                            raise InvalidCiphertextError(str(e)) from None
+                        except Exception as e:
+                            raise InvalidCiphertextError(str(e)) from None
+            except InvalidEnvelopeError:
+                if registry is not None and claim_token is not None:
+                    registry.reject(signature_bytes, claim_token)
+                raise
+            except TransientCryptoBackendError:
+                if registry is not None and claim_token is not None:
+                    registry.release(signature_bytes, claim_token)
+                raise
+            except Exception as e:
+                if registry is not None and claim_token is not None:
+                    registry.reject(signature_bytes, claim_token)
+                raise SecurityError("Cryptographic processing failed") from e
+            finally:
+                safe_zeroize(shared_secret)
+                safe_zeroize(aes_key)
+                safe_zeroize(receiver_kyber_sk if 'receiver_kyber_sk' in locals() else None)
 
-            for i in range(len(session_key)):
-                session_key[i] = 0
+            registry.commit(signature_bytes, claim_token)
 
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning(f"SEC-03: Malformed envelope package input: {e}")
+            raise InvalidEnvelopeError("Malformed envelope package") from None
         except InvalidEnvelopeError:
-            registry.reject(signature_bytes, claim_token)
             raise
         except TransientCryptoBackendError:
-            registry.release(signature_bytes, claim_token)
             raise
-        except BaseException:
-            # Estado incierto: no liberar automáticamente, rechazar
-            registry.reject(signature_bytes, claim_token)
+        except SecurityError:
             raise
-
-        try:
-            registry.commit(signature_bytes, claim_token)
         except Exception as exc:
-            # Nunca liberar aquí: el plaintext ya fue producido.
-            raise SecurityError("Replay registry commit failed") from exc
+            logger.critical(f"SEC-03: Unexpected envelope decryption runtime failure: {exc}", exc_info=True)
+            raise SecurityError("Cryptographic processing failed") from None
+        finally:
+            safe_zeroize(session_key)
+            safe_zeroize(sender_sphincs_pk)
+            safe_zeroize(signature_bytes)
+            safe_zeroize(ciphertext_kem_bytes)
 
         return bytearray(plaintext)
 

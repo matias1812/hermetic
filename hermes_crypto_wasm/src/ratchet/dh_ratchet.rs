@@ -44,6 +44,7 @@ pub struct EncryptedBody {
 }
 
 /// Double Ratchet Engine
+#[derive(Serialize, Deserialize)]
 pub struct DHRatchet {
     pub state: RatchetState,
 }

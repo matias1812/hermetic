@@ -5,6 +5,10 @@ import logging
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
+# NOTE: This module currently contains legacy WebSocket helper logic.
+# The active WebSocket endpoint is routed in `hermes_backend.network_core.api`.
+# Keep this module only for backward compatibility and future refactor tracking.
+
 logger = logging.getLogger(__name__)
 
 class SecurityError(Exception):

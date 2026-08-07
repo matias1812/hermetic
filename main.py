@@ -4,6 +4,9 @@ import uvicorn
 import webbrowser
 import threading
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Ensure the root directory containing our custom oqs package is at the top of sys.path
 root_dir = os.path.dirname(os.path.abspath(__file__))
