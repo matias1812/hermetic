@@ -223,9 +223,17 @@ class DatabaseConnection:
             if self.is_mysql:
                 cursor.execute("SELECT COUNT(*) FROM users")
                 u = cursor.fetchone()[0]
-                cursor.execute("SELECT COUNT(*) FROM replay_claims")
-                k = cursor.fetchone()[0]
-                cursor.execute("TRUNCATE TABLE replay_claims")
+                # replay_claims solo existe si se aplicó el schema de hermes_replay_sql
+                # (Rust/hermes_ffi). En un entorno donde ese pipeline nunca se conectó
+                # (p.ej. desarrollo sin hermes_ffi compilado) la tabla no existe todavía —
+                # eso no es un error, no hay nada que purgar ahí.
+                cursor.execute("SHOW TABLES LIKE 'replay_claims'")
+                if cursor.fetchone():
+                    cursor.execute("SELECT COUNT(*) FROM replay_claims")
+                    k = cursor.fetchone()[0]
+                    cursor.execute("TRUNCATE TABLE replay_claims")
+                else:
+                    k = 0
                 cursor.execute("TRUNCATE TABLE users")
             else:
                 cursor.execute("SELECT COUNT(*) FROM users")
