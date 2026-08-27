@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: hermeticos-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile.backend
+    dockerContext: .
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        # Editar en el dashboard de Render tras el primer deploy: agregar acá el
+        # dominio real del frontend (Vercel/Cloudflare Pages/etc.) separado por comas.
+        # Si más adelante el frontend se empaqueta como APK Android (WebView), agregar
+        # también "null,file://" — el WebView manda Origin: file://, y sin esto el
+        # login/relay/backup quedan bloqueados por CORS (mismo problema documentado
+        # en el proyecto hermano Vyneural).
+        value: "http://localhost:5173,http://localhost:5174"
+      - key: HERMES_ENV
+        # Sin fijar = development: sin header HSTS, registro anti-replay en memoria de
+        # proceso (no compartido entre instancias). Ver Dockerfile.backend para el porqué
+        # (hermes_ffi / SQL compartido no están compilados en esta imagen). No poner
+        # "production" acá sin antes compilar rust/hermes_ffi_py y provisionar MySQL/Postgres
+        # — con production y sin eso, el proceso aborta al arrancar (fail-closed, a propósito).
+        value: "development"
