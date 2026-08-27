@@ -1,18 +1,21 @@
 // frontend/src/js/persistence_manager.js
+import { hermesBridge } from './crypto_wasm_bridge.js';
 
 export class PersistenceManager {
     /**
      * Gestor de persistencia en IndexedDB.
      *
-     * ⚠️ AUDITORÍA (2026-08-27): save()/saveKey()/saveMessage()/etc. NO cifran nada —
-     * store.put(data) guarda los objetos tal cual, incluida privateKey en saveKey().
-     * Esta clase NO está conectada a la app real hoy (su único consumidor,
-     * store/hermes_store.js, nunca se instancia como window.hermesStore — grep
-     * confirma que esa asignación no existe en ningún lado del código). Antes de
-     * conectar esta clase a algo real, hay que replicar el patrón de storage_manager.js /
-     * media_storage.js: cifrar vía hermesBridge.encryptLocalDatabaseChunk (vault_key real)
-     * y mantener solo el campo `id` en claro (lo exige keyPath: 'id' de cada objectStore).
-     * NO asumir que "GARANTÍAS: TODO se guarda cifrado" es cierto solo porque lo dice acá.
+     * AUDITORÍA (2026-08-27): esta clase resultó estar más "viva" de lo que parecía —
+     * hermes_store.js (su único consumidor) SÍ se instancia e inicializa en cada boot
+     * (app_initializer.js), y reconciliation_manager.js llama a
+     * hermesStore.dispatch('GROUP_CREATED'/'CONTACT_ADDED', ...) en cada login real
+     * (evento hermes:logged_in) cuando detecta discordancia con el servidor. Hoy ese
+     * camino queda cortado porque /api/user/state (del que depende) no existe en el
+     * backend — pero es una feature a medio construir, no código abandonado; el día
+     * que se agregue ese endpoint esto se activa solo. save()/load()/loadAll() cifran
+     * todo el payload salvo `id` (lo exige keyPath: 'id' de cada objectStore) vía
+     * hermesBridge.encryptLocalDatabaseChunk — mismo mecanismo que storage_manager.js /
+     * media_storage.js, que ya falla cerrado si la bóveda no está desbloqueada.
      */
     
     constructor() {
@@ -183,22 +186,38 @@ export class PersistenceManager {
         }
     }
 
+    // Cifra todo el registro salvo `id` (clave del objectStore) vía la vault_key real.
+    // Lanza si la bóveda está bloqueada — mismo fail-closed que storage_manager.js.
+    _seal(data) {
+        const { id, ...rest } = data;
+        const sealed = hermesBridge.encryptLocalDatabaseChunk(JSON.stringify(rest));
+        return { id, _sealed: sealed };
+    }
+
+    _unseal(record) {
+        if (!record) return record;
+        if (!record._sealed) return record; // registro legado sin cifrar — no debería existir en uso real
+        const rest = JSON.parse(hermesBridge.decryptLocalDatabaseChunk(record._sealed));
+        return { id: record.id, ...rest };
+    }
+
     async save(storeName, data) {
         if (!this.db) await this.initialize();
+        const record = this._seal(data);
         return await this.withLock(`hermes_db_${storeName}`, 'exclusive', async () => {
             return new Promise((resolve, reject) => {
                 const transaction = this.db.transaction([storeName], 'readwrite');
                 const store = transaction.objectStore(storeName);
-                const request = store.put(data);
+                const request = store.put(record);
                 request.onsuccess = () => resolve();
                 request.onerror = () => reject(request.error);
             });
         });
     }
-    
+
     async load(storeName, id) {
         if (!this.db) await this.initialize();
-        return await this.withLock(`hermes_db_${storeName}`, 'shared', async () => {
+        const record = await this.withLock(`hermes_db_${storeName}`, 'shared', async () => {
             return new Promise((resolve, reject) => {
                 const transaction = this.db.transaction([storeName], 'readonly');
                 const store = transaction.objectStore(storeName);
@@ -207,11 +226,12 @@ export class PersistenceManager {
                 request.onerror = () => reject(request.error);
             });
         });
+        return this._unseal(record);
     }
-    
+
     async loadAll(storeName) {
         if (!this.db) await this.initialize();
-        return await this.withLock(`hermes_db_${storeName}`, 'shared', async () => {
+        const records = await this.withLock(`hermes_db_${storeName}`, 'shared', async () => {
             return new Promise((resolve, reject) => {
                 const transaction = this.db.transaction([storeName], 'readonly');
                 const store = transaction.objectStore(storeName);
@@ -220,6 +240,7 @@ export class PersistenceManager {
                 request.onerror = () => reject(request.error);
             });
         });
+        return records.map(r => this._unseal(r));
     }
     
     async delete(storeName, id) {
