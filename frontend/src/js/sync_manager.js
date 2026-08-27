@@ -801,6 +801,24 @@ export class SyncManager {
         }
     }
 
+    // Sella un plaintext contra la clave pública ML-KEM-1024 real del receptor. Usado
+    // para cualquier payload de bootstrap (lleva material de clave que el receptor todavía
+    // no tiene, así que no puede haber ratchet ni sharedKey involucrados en protegerlo).
+    _sealBootstrapEnvelope(plaintext, receiverKyberPk, senderId, receiverId) {
+        const plaintextBytes = new TextEncoder().encode(plaintext);
+        const sealedJson = hermesBridge.sealForContact(receiverKyberPk, plaintextBytes);
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signatureHex = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
+        return {
+            version: "sealed_v1",
+            sealed: sealedJson,
+            signature: signatureHex,
+            timestamp: timestamp,
+            sender_id: senderId || "",
+            receiver_id: receiverId || ""
+        };
+    }
+
     async sendBlob(senderId, receiverId, payloadObj, routeToId = null) {
         // Resolve receiver hash and keys
         const receiverHash = await sha256(routeToId || receiverId);
@@ -821,34 +839,28 @@ export class SyncManager {
             if (!keysRes.ok) throw new Error("Receiver not registered");
             const keys = await keysRes.json();
             receiverKyberPk = keys.kyber_pk_hex;
-            if (payloadObj.type === "contact_accept") {
-                sessionKeyHex = "0000000000000000000000000000000000000000000000000000000000000000";
-            } else {
-                sessionKeyHex = this.contacts.sharedKeys[receiverId] || "0000000000000000000000000000000000000000000000000000000000000000";
-            }
+            sessionKeyHex = this.contacts.sharedKeys[receiverId] || "0000000000000000000000000000000000000000000000000000000000000000";
         }
 
         // Encrypt the inner payload
         const plaintext = JSON.stringify(payloadObj);
         let envelope = null;
 
-        // contact_accept lleva el secreto que siembra toda la sesión futura con este
-        // contacto. Todavía no existe ratchet ni sharedKey establecida, así que NO puede
-        // caer en el fallback genérico (que cifraría con una clave AES fija y pública).
-        // Se sella con ML-KEM-1024 real contra la clave pública del receptor.
-        if (!isGroup && payloadObj.type === "contact_accept" && receiverKyberPk && receiverKyberPk !== "none") {
-            const plaintextBytes = new TextEncoder().encode(plaintext);
-            const sealedJson = hermesBridge.sealForContact(receiverKyberPk, plaintextBytes);
-            const timestamp = Math.floor(Date.now() / 1000);
-            const signatureHex = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
-            envelope = {
-                version: "sealed_v1",
-                sealed: sealedJson,
-                signature: signatureHex,
-                timestamp: timestamp,
-                sender_id: senderId || "",
-                receiver_id: receiverId || ""
-            };
+        // Cualquier payload que LLEVE material de clave (shared_key/symmetric_key/
+        // new_symmetric_key: contact_accept, group_invite, group_rekey, y cualquier tipo
+        // futuro con el mismo shape) no puede depender de un ratchet o sharedKey derivados
+        // de ese mismo secreto — el receptor todavía no lo tiene, es circular. Tampoco puede
+        // caer en el fallback genérico (clave AES fija y pública). Se sella con ML-KEM-1024
+        // real contra la clave pública del receptor. contact_accept en particular NUNCA debe
+        // pasar por el intento de ratchet de abajo (el emisor ya guardó localmente su propio
+        // shared_key recién generado antes de llamar sendBlob, así que getOrInitRatchet
+        // "encontraría" ese shared_key y cifraría con un ratchet que el receptor —que aún no
+        // conoce ese secreto— no puede replicar).
+        const carriesKeyMaterial = !isGroup && (
+            'shared_key' in payloadObj || 'symmetric_key' in payloadObj || 'new_symmetric_key' in payloadObj
+        );
+        if (carriesKeyMaterial && payloadObj.type === "contact_accept" && receiverKyberPk && receiverKyberPk !== "none") {
+            envelope = this._sealBootstrapEnvelope(plaintext, receiverKyberPk, senderId, receiverId);
         }
 
         if (!envelope && !isGroup && payloadObj.type !== "contact_accept" && payloadObj.type !== "contact_request" && payloadObj.type !== "oob_verify") {
@@ -885,6 +897,13 @@ export class SyncManager {
             } catch (errRatchet) {
                 console.warn(`[DoubleRatchet] v2 encryption failed for ${receiverId}, falling back to v1:`, errRatchet);
             }
+        }
+
+        // group_invite / group_rekey (u otro tipo futuro con material de clave) llegaron
+        // hasta acá sin ratchet (p.ej. invitando a alguien que todavía no es contacto
+        // directo). Mismo criterio que arriba: sellar, nunca clave AES fija.
+        if (!envelope && carriesKeyMaterial && receiverKyberPk && receiverKyberPk !== "none") {
+            envelope = this._sealBootstrapEnvelope(plaintext, receiverKyberPk, senderId, receiverId);
         }
 
         if (!envelope) {
