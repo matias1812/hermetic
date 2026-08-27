@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 
 use crate::errors::ReplayError;
 use crate::replay::model::{ClaimToken, ReplayState, SignatureHash};

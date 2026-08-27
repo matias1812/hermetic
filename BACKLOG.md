@@ -89,12 +89,40 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
    `contact_accept`/`seal_for_contact`) — pero ya no es código fantasma que aparenta
    protección PQC sin darla.
 
-5. **`HERMES_ENV=production` nunca se probó de punta a punta.** Requiere compilar
-   `rust/hermes_ffi_py` (registro anti-replay compartido vía SQL) y provisionar
-   MySQL/Postgres real. Sin eso, `native_core.py` aborta el arranque por diseño
-   (fail-closed) — no es un bug, es una decisión pendiente sobre si vale la inversión para
-   el volumen de tráfico actual, o si el modo actual (registro en memoria, un solo proceso)
-   alcanza por ahora.
+~~5. **`HERMES_ENV=production` nunca se probó de punta a punta.**~~
+   **Resuelto (2026-08-27) — probado de punta a punta con evidencia real, no solo lectura
+   de código.** La investigación cambió el diagnóstico dos veces:
+   - Primero se creyó que faltaba escribir el motor cripto nativo
+     (`generate_keys_native`/`encapsulate_and_encrypt_native`/`decrypt_and_decapsulate_native`).
+     Falso: cero consumidores reales en la app (`HermesNativeCore.encrypt_envelope`/
+     `decrypt_envelope` solo los llama `hermes_backend/verification/*.py`, un harness de
+     auto-test interno — ningún endpoint real de mensajería los usa, el E2E real es
+     100% client-side WASM). Y aunque `native_core.py` los busca, si `hermes_ffi` existe
+     pero le faltan esos símbolos específicos, el arranque en producción NO aborta —
+     solo loguea un warning. Verificado con evidencia: no hizo falta escribir ese motor.
+   - Segundo, se creyó que el registro anti-replay compartido (`SqlReplayRegistry`) no
+     estaba conectado del lado Python. También falso — `otp_registry.py` ya lo llamaba
+     correctamente de punta a punta. Lo que faltaba de verdad era compilar
+     `rust/hermes_ffi_py`, algo que nunca se había hecho con éxito en ningún entorno: 3
+     bugs reales de compilación (nunca detectados porque nunca se compiló) — falta
+     `use rand::RngExt` en `hermes_ffi_core`, falta la dependencia `rand` completa en
+     `Cargo.toml` de `hermes_replay_sql`, y `Python::allow_threads` (pyo3 viejo) ya no
+     existe en pyo3 0.29.0 (renombrado a `Python::detach`). Los tres arreglados.
+   - Compilar nativo para Windows en esta máquina de desarrollo sigue sin ser viable
+     (falta dlltool/MSVC), pero compilar para Linux en Docker sí lo es — y es el target
+     real de despliegue (Render). Nuevo `Dockerfile.backend.native-test` (harness de
+     prueba, no parte del pipeline de deploy) compila `hermes_ffi_py` para Linux y lo
+     instala como `hermes_ffi.so`. Probado con un MySQL 8 real (`docker run`, no mock):
+     `SqlReplayRegistry.health_check()`/`.claim()`/`.commit()` contra la tabla real
+     `replay_claims`; arranque completo del servidor con `HERMES_ENV=production` +
+     `HERMES_REPLAY_BACKEND=sql`; y un ataque de replay real vía HTTP (`/api/login` dos
+     veces con la misma firma) correctamente rechazado (401) con la fila de consumo
+     verificada directamente en MySQL (`SELECT ... FROM replay_claims` -> `state=consumed`)
+     y el log estructurado `REPLAY_ATTACK_BLOCKED` de la app.
+   - `db_connection.py` (la base de datos principal, aparte del registro de replay) sigue
+     usando `DB_HOST`/`DB_USER`/etc. por separado y no se probó contra MySQL real en esta
+     pasada — fuera del alcance de esta pregunta específica, cae a SQLite sin error si no
+     hay MySQL alcanzable (comportamiento documentado, no un bug).
 
 ~~6. **Panel de administrador sin backend real.**~~
    **Resuelto (2026-08-27) — se retiró la UI.** Investigado antes de decidir: el gate

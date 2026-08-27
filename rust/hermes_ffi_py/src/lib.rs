@@ -72,7 +72,7 @@ impl NativeReplayRegistry {
         
         // Clone domain string to move into the closure
         let domain_owned = domain.to_string();
-        let token = py.allow_threads(move || {
+        let token = py.detach(move || {
             store.claim(&domain_owned, hash, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         
@@ -88,7 +88,7 @@ impl NativeReplayRegistry {
         let store = self.store.clone();
         
         let domain_owned = domain.to_string();
-        let token = py.allow_threads(move || {
+        let token = py.detach(move || {
             store.claim(&domain_owned, hash, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         
@@ -109,7 +109,7 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.commit(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -129,7 +129,7 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.commit(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -149,7 +149,7 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.reject(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -169,7 +169,7 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.reject(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -188,7 +188,7 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.release(&domain_owned, hash, t)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -225,7 +225,7 @@ impl SqlReplayRegistry {
         let store = self.store.clone();
         
         let domain_owned = domain.to_string();
-        let token = py.allow_threads(move || {
+        let token = py.detach(move || {
             store.claim(&domain_owned, hash, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         
@@ -241,7 +241,7 @@ impl SqlReplayRegistry {
         let store = self.store.clone();
         
         let domain_owned = domain.to_string();
-        let token = py.allow_threads(move || {
+        let token = py.detach(move || {
             store.claim(&domain_owned, hash, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         
@@ -262,7 +262,7 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.commit(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -282,7 +282,7 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.commit(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -302,7 +302,7 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.reject(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -322,7 +322,7 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.reject(&domain_owned, hash, t, now, ttl_seconds)
         }).map_err(map_replay_error)?;
         Ok(())
@@ -341,7 +341,7 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.allow_threads(move || {
+        py.detach(move || {
             store.release(&domain_owned, hash, t)
         }).map_err(map_replay_error)?;
         Ok(())

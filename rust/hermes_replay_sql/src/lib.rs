@@ -3,7 +3,7 @@ use hermes_ffi_core::replay::model::{ClaimToken, SignatureHash};
 use hermes_ffi_core::replay::store::ReplayStore;
 use mysql::prelude::Queryable;
 use mysql::{params, Pool};
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 
 pub struct SqlReplayStore {
     pool: Pool,
