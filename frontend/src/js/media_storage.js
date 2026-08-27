@@ -7,8 +7,10 @@ export class MediaStorage {
     /**
      * Gestor de almacenamiento multimedia basado en IndexedDB.
      *
-     * Los datos se almacenan cifrados (misma clave que EncryptedStorageManager).
-     * La clave debe inyectarse con setKey() tras el desbloqueo del usuario.
+     * Los datos se almacenan cifrados vía hermesBridge.encryptLocalDatabaseChunk
+     * (vault_key real, derivada con Argon2id — ver core_api.rs). No requiere que se
+     * le inyecte ninguna clave: delega directamente al mismo mecanismo que usa
+     * EncryptedStorageManager, que ya falla cerrado si la bóveda no está desbloqueada.
      *
      * Stores:
      *   images  — imágenes permanentes y referencias de efímeras
@@ -19,13 +21,12 @@ export class MediaStorage {
         this.dbName    = 'hermes_media';
         this.dbVersion = 1;
         this.db        = null;
-        this._key      = null;   // CryptoKey AES-GCM (inyectada desde EncryptedStorageManager)
     }
 
-    /** Inyectar la CryptoKey derivada de la contraseña del usuario. */
-    setKey(cryptoKey) {
-        this._key = cryptoKey;
-    }
+    /** @deprecated no-op — mantenido por compatibilidad con llamadas existentes.
+     * El cifrado ya no depende de una CryptoKey inyectada: _encrypt()/_decrypt()
+     * delegan siempre a hermesBridge, que usa la vault_key real internamente. */
+    setKey(_cryptoKey) {}
 
     /** Abrir / crear la base de datos IndexedDB. */
     async open() {
@@ -77,9 +78,7 @@ export class MediaStorage {
             obj = { id: imageData, base64Data: maybeData };
         }
 
-        const encryptedData = this._key
-            ? await this._encrypt(obj.base64Data || obj.data)
-            : (obj.base64Data || obj.data);
+        const encryptedData = await this._encrypt(obj.base64Data || obj.data);
 
         const record = {
             id:            obj.id || ('img_' + Date.now()),
@@ -103,14 +102,12 @@ export class MediaStorage {
         const record = await this._get('images', id);
         if (!record) return null;
 
-        if (this._key && record.encryptedData) {
+        if (record.encryptedData) {
             try {
                 record.base64Data = await this._decrypt(record.encryptedData);
             } catch {
-                record.base64Data = null;   // clave incorrecta o dato corrupto
+                record.base64Data = null;   // clave incorrecta, bóveda bloqueada o dato corrupto
             }
-        } else {
-            record.base64Data = record.encryptedData;
         }
 
         return record;
@@ -165,9 +162,7 @@ export class MediaStorage {
             obj = { id: audioData, base64Data: maybeData };
         }
 
-        const encryptedData = this._key
-            ? await this._encrypt(obj.base64Data || obj.data)
-            : (obj.base64Data || obj.data);
+        const encryptedData = await this._encrypt(obj.base64Data || obj.data);
 
         const record = {
             id:            obj.id || ('aud_' + Date.now()),
@@ -189,14 +184,12 @@ export class MediaStorage {
         const record = await this._get('audio', id);
         if (!record) return null;
 
-        if (this._key && record.encryptedData) {
+        if (record.encryptedData) {
             try {
                 record.base64Data = await this._decrypt(record.encryptedData);
             } catch {
                 record.base64Data = null;
             }
-        } else {
-            record.base64Data = record.encryptedData;
         }
 
         return record;
@@ -253,13 +246,11 @@ export class MediaStorage {
     // ─────────────────────────────────────────
 
     async _encrypt(plaintext) {
-        if (!this._key) return plaintext;
         const encoded = JSON.stringify(plaintext);
         return hermesBridge.encryptLocalDatabaseChunk(encoded);
     }
 
     async _decrypt(base64) {
-        if (!this._key) return base64;
         const decryptedStr = hermesBridge.decryptLocalDatabaseChunk(base64);
         return JSON.parse(decryptedStr);
     }
