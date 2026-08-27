@@ -343,6 +343,8 @@ class LoginRequest(BaseModel):
     password: str
     kyber_pk_hex: str
     sphincs_pk_hex: str
+    timestamp: int
+    signature: str
 
 class RelayPayload(BaseModel):
     sender_hash: str
@@ -530,10 +532,25 @@ async def clear_blobs_endpoint(
     return {"status": "success", "cleared": True}
 
 @app.post("/api/login")
-async def login_user(data: LoginRequest):
+async def login_user(request: Request, data: LoginRequest):
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(ip, limit=20, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     user = db.get_user(data.client_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identity credentials not registered")
+
+    # Prueba de posesión de la clave privada: sin esto, cualquiera que supiera el alias
+    # público (client_id = SHA3-256(alias)) podía emitirse un token de sesión válido para
+    # cualquier cuenta. Mismo mecanismo que /api/backup y /api/blobs/clear.
+    if not await verify_client_signature(
+        data.client_id,
+        data.timestamp,
+        data.signature,
+        ip
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
 
     try:
         token = generate_session_token(data.client_id)

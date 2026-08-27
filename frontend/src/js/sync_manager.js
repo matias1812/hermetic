@@ -183,6 +183,13 @@ export class SyncManager {
             const userKeys = await this.getOrRecoverUserKeys();
             if (!userKeys) return;
 
+            // Prueba de posesión de la clave privada: el servidor exige timestamp+signature
+            // firmados con la clave Ed25519/SPHINCS+ del usuario antes de emitir un token de
+            // sesión (si no, cualquiera que supiera el alias público podía autenticarse como
+            // cualquier cuenta).
+            const timestamp = Math.floor(Date.now() / 1000);
+            const signatureHex = await CryptoClient.signTimestamp(timestamp, userKeys.sphincs_sk);
+
             const res = await fetch('/api/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -190,7 +197,9 @@ export class SyncManager {
                     client_id: idHash,
                     password: '',
                     kyber_pk_hex: userKeys.kyber_pk,
-                    sphincs_pk_hex: userKeys.sphincs_pk
+                    sphincs_pk_hex: userKeys.sphincs_pk,
+                    timestamp: timestamp,
+                    signature: signatureHex
                 })
             });
             if (res.ok) {
