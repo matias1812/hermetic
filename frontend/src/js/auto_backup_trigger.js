@@ -1,6 +1,5 @@
 // frontend/src/js/auto_backup_trigger.js
 import { state, showToast } from './state.js';
-import { CryptoClient } from './crypto_client.js';
 
 export class AutoBackupTrigger {
     constructor(backupManager, recoverySystem) {
@@ -91,32 +90,10 @@ export class AutoBackupTrigger {
     }
 
     async uploadToCloud(encryptedBuffer) {
-        const userId = state.storage.getUserId();
-        const hexData = state.backup._bufferToHex(encryptedBuffer);
-        const timestamp = Math.floor(Date.now()/1000);
-        const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
-        const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
-
-        const payload = {
-            user_hash: userId,
-            encrypted_data_hex: hexData,
-            backup_id: crypto.randomUUID(),
-            backup_type: window.privacySettings?.settings.backupType || 'full',
-            parent_id: null,
-            timestamp: timestamp,
-            signature: signature
-        };
-
-        const headers = { "Content-Type": "application/json" };
-        if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
-
-        const res = await fetch("/api/backup", {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payload)
-        });
-
-        if (!res.ok) throw new Error("Cloud upload failed");
+        // Delegado a BackupManager (BACKLOG #2) -- fuente única de subida a
+        // /api/backup, antes duplicada acá casi idéntica.
+        const backupType = window.privacySettings?.settings.backupType || 'full';
+        await state.backup.uploadToCloud(encryptedBuffer, backupType);
     }
 
     showBackupToast(dest) {

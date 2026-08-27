@@ -239,6 +239,40 @@ export class BackupManager {
         return hermesBridge.decryptBackupData(encrypted, password);
     }
 
+    // Fuente única de subida a /api/backup (BACKLOG #2 — antes duplicada casi
+    // idéntica en auto_backup_trigger.js::uploadToCloud y en _doAutoBackup de acá
+    // abajo). recovery_system_complete.js NO delega acá a propósito: deriva su
+    // clave de un mnemónico en vez de la contraseña/vault local, es un sistema
+    // conceptualmente distinto, no un duplicado.
+    async uploadToCloud(encryptedBuffer, backupType = 'full', algorithm = 'AES-GCM/Argon2') {
+        const userHash = this.storage.getUserId();
+        const hexData = this._bufferToHex(encryptedBuffer);
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
+        const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
+
+        const res = await fetch('/api/backup', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                user_hash: userHash,
+                encrypted_data_hex: hexData,
+                backup_id: crypto.randomUUID(),
+                backup_type: backupType,
+                parent_id: null,
+                timestamp,
+                signature,
+                version: 1,
+                algorithm,
+            }),
+        });
+        if (!res.ok) throw new Error(`Cloud upload failed: HTTP ${res.status}`);
+        return res.json();
+    }
+
     async downloadBackupFile(data) {
         /**
          * Descarga archivo .hermes usando File System Access API si está disponible (para prompt "Save As")
@@ -735,34 +769,8 @@ export class BackupManager {
                     this._recoveryKey, compressed
                 );
 
-                // /api/recovery_blob nunca existió en el backend — usa /api/backup real,
-                // el mismo endpoint que ya funciona para auto_backup_trigger.js y el
-                // backup por contraseña más abajo en este archivo.
                 try {
-                    const userHash = this.storage.getUserId();
-                    const ts = Math.floor(Date.now() / 1000);
-                    const signature = await CryptoClient.signTimestamp(ts, state.userKeys?.sphincs_sk);
-                    const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
-                    const headers = { 'Content-Type': 'application/json' };
-                    if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
-                    const encryptedHex = Array.from(new Uint8Array(encrypted)).map(b => b.toString(16).padStart(2, '0')).join('');
-
-                    const res = await fetch('/api/backup', {
-                        method:  'POST',
-                        headers,
-                        body:    JSON.stringify({
-                            user_hash: userHash,
-                            encrypted_data_hex: encryptedHex,
-                            backup_id: crypto.randomUUID(),
-                            backup_type: 'recovery',
-                            parent_id: null,
-                            timestamp: ts,
-                            signature,
-                            version: 1,
-                            algorithm: 'AES-GCM/RecoveryKey',
-                        }),
-                    });
-                    if (!res.ok) console.warn('[BackupManager] Servidor rechazó el backup remoto:', res.status);
+                    await this.uploadToCloud(encrypted, 'recovery', 'AES-GCM/RecoveryKey');
                 } catch (e) {
                     console.warn('[BackupManager] Upload remoto falló:', e.message);
                 }

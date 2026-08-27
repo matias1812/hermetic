@@ -53,12 +53,17 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
    `/api/register`, `/api/login` y `/api/verify` compartían un solo balde de cuota (la IP
    pelada como key en los tres) — cada uno tiene ahora su propia key.
 
-2. **Consolidar las 3 implementaciones de backup en la nube.**
-   `backup_manager.js`, `auto_backup_trigger.js` (duplica la lógica de subida en vez de
-   reusar `backup_manager.js`) y `recovery_system_complete.js` (mnemónico, sistema aparte)
-   ahora las tres pegan correctamente contra `/api/backup`/`/api/backup/fetch` — pero siguen
-   siendo tres implementaciones paralelas. Decidir cuál es la fuente de verdad y hacer que
-   las otras dos deleguen, en vez de mantener tres caminos independientes.
+~~2. **Consolidar las 3 implementaciones de backup en la nube.**~~
+   **Resuelto (2026-08-27).** `BackupManager.uploadToCloud(encryptedBuffer, backupType,
+   algorithm)` es ahora la única implementación de `POST /api/backup` en el frontend.
+   `auto_backup_trigger.js::uploadToCloud()` pasó de duplicar la subida a delegar en ella
+   (import muerto de `CryptoClient` removido de paso), y el propio `_doAutoBackup` de
+   `backup_manager.js` (rama de recovery key) también la usa en vez de tener su propia
+   copia del fetch. `recovery_system_complete.js` queda aparte a propósito — deriva su
+   clave de un mnemónico, no de la contraseña/vault local, así que no es un duplicado real
+   del mismo flujo, sino un sistema de recuperación conceptualmente distinto. Wire format
+   sin cambios (mismo shape `BackupPayload`), verificado con `tests/test_backup_upload_flow.py`
+   y `tests/test_recovery_cloud_sync.py`.
 
 ~~3. **`hermes_ip_middleware` no se compila para Linux en el Docker del backend.**~~
    **Resuelto (2026-08-27).** `Dockerfile.backend` ahora tiene un stage `rust:1.80-slim-bookworm`
