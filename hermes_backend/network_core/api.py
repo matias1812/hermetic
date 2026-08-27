@@ -829,10 +829,14 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 ts = auth_data.get("timestamp")
                 sig = auth_data.get("signature")
                 show_online = auth_data.get("show_online", True)
-                # Autenticación WS: el client_id está anclado a la URL /ws/{client_id} y
-                # verificado contra usuarios registrados. Si la firma SPHINCS+ está presente
-                # y es válida — mejor. Si no, aceptamos igual (mismo modelo que relay Bearer JWT).
-                # Esto evita que latencia WASM rompa el handshake con timeout de 5s.
+                # Autenticación WS: requiere prueba de posesión de la clave privada (firma
+                # sobre el timestamp), igual que /api/login, /api/backup y /api/blobs/clear.
+                # ANTES: si la firma faltaba o fallaba, se aceptaba la conexión igual con solo
+                # que el client_id existiera como usuario registrado (client_id = SHA3-256(alias),
+                # público). El cliente legítimo (sync_manager.js:connectWebSocket) SIEMPRE firma
+                # antes de mandar "auth" — nunca dependió de ese fallback — así que era una puerta
+                # trasera pura: cualquiera podía conectarse como cualquier usuario registrado y
+                # recibir en tiempo real (e interceptar la entrega de) sus mensajes.
                 sig_valid = False
                 if ts and sig:
                     try:
@@ -841,9 +845,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             websocket.client.host if websocket.client else 'unknown'
                         )
                     except Exception:
-                        pass  # Firma inválida — aceptamos si el usuario está registrado
-                user_registered = db.get_user(client_id) is not None
-                if sig_valid or (ts and user_registered):
+                        sig_valid = False
+                if sig_valid:
                     auth_ok = True
                     ws_manager.public_status[client_id] = show_online
                     await websocket.send_text(json.dumps({"type": "auth_ok"}))
