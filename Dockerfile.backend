@@ -1,0 +1,45 @@
+# Dockerfile.backend — corre el blind relay (FastAPI/Uvicorn), NO el build del WASM.
+#
+# El "Dockerfile" en la raíz de este repo es para OTRA cosa (reproducible build del
+# crate Rust/WASM del cliente, via `docker build --output out/` desde ese Dockerfile).
+# Si tu plataforma de hosting busca "Dockerfile" por defecto, apuntala explícitamente
+# a este archivo (p.ej. Render: "Dockerfile Path" = Dockerfile.backend) — si no, va a
+# intentar compilar el WASM en vez de levantar el servidor.
+#
+# pqcrypto==0.4.0 (ver requirements.txt) tiene wheel manylinux para cp313 — no hace
+# falta toolchain de compilación acá. NO usar pqcrypto>=1.0.0: es una reescritura con
+# API distinta (keygen/encaps/decaps) incompatible con kyber_manager.py/sphincs_manager.py.
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY hermes_backend/ ./hermes_backend/
+
+# HERMES_ENV se deja SIN fijar acá a propósito. hermes_backend/crypto_core/native_core.py
+# aborta el arranque (fail-closed) si HERMES_ENV=production y no está compilado el
+# binding nativo Rust hermes_ffi (rust/hermes_ffi_py) — que esta imagen no compila.
+# Sin HERMES_ENV=production: no hay header HSTS, y el registro anti-replay
+# (otp_registry.py) cae a memoria de proceso en vez del backend SQL compartido.
+# Aceptable para una sola instancia de bajo tráfico; para producción real hay que
+# compilar hermes_ffi + Postgres/MySQL y setear HERMES_ENV=production explícitamente.
+#
+# Variables requeridas en runtime (las inyecta la plataforma de hosting, NO van acá):
+#   SESSION_SECRET     — HMAC de sesión, mínimo 32 caracteres
+#   ALLOWED_ORIGINS     — orígenes separados por coma (sin "*"). Si más adelante el
+#                         frontend se empaqueta como APK Android (WebView), agregar
+#                         "null,file://" acá — el WebView manda Origin: file://, y sin
+#                         esto el login/relay/backup quedan bloqueados por CORS.
+#   DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/DB_PORT (opcionales) — si no hay MySQL
+#                         alcanzable, db_connection.py cae solo a SQLite local.
+
+EXPOSE 8000
+
+# --no-access-log es OBLIGATORIO: sin esto, uvicorn imprime la IP real de cada cliente
+# en stdout sin pasar por PrivacyMiddleware (que solo anonimiza SUS propios logs, no
+# los del servidor HTTP). main.py (uso local) ya lo hacía vía access_log=False; acá se
+# replica explícito porque main.py no es el entrypoint de producción (abre navegador,
+# corre el preflight audit interactivo).
+CMD ["sh", "-c", "uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]

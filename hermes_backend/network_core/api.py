@@ -972,20 +972,35 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         ws_manager.disconnect(client_id, websocket)
         conn_limiter.release()
 
-# Servir archivos estáticos
-app.mount("/assets", StaticFiles(directory=os.path.join(os.getcwd(), "dist", "assets")), name="assets")
+# Servir archivos estáticos del frontend — SOLO si dist/ está presente junto al backend
+# (uso local vía main.py, que sirve todo desde el mismo origen). En un despliegue
+# separado (API/WS en un servicio, frontend estático en otro — p.ej. Vercel/Cloudflare
+# Pages — como Dockerfile.backend), dist/ no existe acá y antes esto crasheaba el
+# proceso entero al importar el módulo (StaticFiles exige que el directorio exista).
+_dist_assets_dir = os.path.join(os.getcwd(), "dist", "assets")
+_dist_index = os.path.join(os.getcwd(), "dist", "index.html")
+_SERVE_FRONTEND = os.path.isdir(_dist_assets_dir)
 
-@app.get("/")
-async def serve_index():
-    return FileResponse(os.path.join(os.getcwd(), "dist", "index.html"))
+if _SERVE_FRONTEND:
+    app.mount("/assets", StaticFiles(directory=_dist_assets_dir), name="assets")
 
-@app.get("/landing")
-@app.get("/landing.html")
-async def serve_landing():
-    landing_path = os.path.join(os.getcwd(), "dist", "landing.html")
-    if os.path.exists(landing_path):
-        return FileResponse(landing_path)
-    return FileResponse(os.path.join(os.getcwd(), "dist", "index.html"))
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(_dist_index)
+
+    @app.get("/landing")
+    @app.get("/landing.html")
+    async def serve_landing():
+        landing_path = os.path.join(os.getcwd(), "dist", "landing.html")
+        if os.path.exists(landing_path):
+            return FileResponse(landing_path)
+        return FileResponse(_dist_index)
+else:
+    logger.info("dist/ no encontrado junto al backend — sirviendo solo API/WS (frontend desplegado por separado).")
+
+    @app.get("/")
+    async def serve_index():
+        return {"status": "ok", "service": "hermeschat-blind-relay"}
 
 @app.on_event("shutdown")
 def on_shutdown():

@@ -1,0 +1,37 @@
+# Sirve para Dockerfile.backend (build del backend Python). El Dockerfile de la raíz
+# (build reproducible del WASM) tiene su propio contexto acotado vía COPY explícitos,
+# no depende de este archivo.
+
+.git/
+.github/
+
+# Frontend: no lo necesita el backend en runtime
+frontend/node_modules/
+frontend/dist/
+frontend/src/
+
+# Rust: no se compila nada de esto en la imagen del backend
+hermes_crypto_wasm/target/
+hermes_crypto_wasm/pkg/
+hermes_ip_middleware/target/
+rust/target/
+target/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+.venv/
+venv/
+
+# Secretos y datos locales — nunca deben entrar a la imagen
+.env
+.env.*
+*.db
+*.sqlite
+
+# Scratch/dev
+scratch/
+.freebuff/
+server_log*.txt
