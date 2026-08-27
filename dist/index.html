@@ -191,8 +191,8 @@
       }
     </style>
 
-    <script type="module" crossorigin src="/assets/main-D4gfwIMO.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/main-D32EqoNd.css">
+    <script type="module" crossorigin src="/assets/main-CLbY8ee5.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/main-BKo75gt-.css">
   </head>
 
   <body class="crt-effect selection:bg-terminalGreen selection:text-black min-h-[100dvh]">
@@ -954,12 +954,6 @@
 
           <div class="p-5 space-y-2.5">
 
-            <button id="btn-admin-panel" onclick="window.modalManager?.open('admin-panel-modal'); if(window.adminPanel) window.adminPanel.fetchStats();" class="w-full text-left px-3 py-2.5 text-yellow-400 hover:bg-yellow-950/20 transition-colors rounded border border-yellow-500/40 text-[10px] font-mono font-bold flex items-center gap-2 hidden">
-
-              <span>👑</span> SALUD CRIPTOGRÁFICA Y ADMIN
-
-            </button>
-
             <button id="btn-settings-logout" class="w-full text-left px-3 py-2.5 text-gray-300 hover:bg-black/40 transition-colors rounded border border-darkGrey/40 text-[10px] font-mono font-bold flex items-center gap-2">
 
               <span class="text-terminalGreen">X</span> CERRAR SESION
@@ -1247,15 +1241,7 @@
     <button onclick="window.modalManager?.closeActive()" class="w-full bg-darkMuted hover:bg-terminalGreen hover:text-black border border-terminalGreen/20 text-terminalGreen font-bold py-2 rounded text-[10px] tracking-widest transition-colors">[ COMENZAR A CHATEAR ]</button>
   </div>
 </div>
-
-  <!-- MODAL: ADMIN & CRYPTO HEALTH DASHBOARD -->
-<div id="admin-panel-modal" class="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center p-4 z-[2147483647] hidden opacity-0 transition-opacity duration-300">
-  <div class="bg-gradient-to-b from-[#0f1017] to-[#14161f] border border-terminalGreen/50 rounded-xl max-w-4xl w-full p-5 shadow-[0_0_40px_rgba(0,255,102,0.2)] relative font-mono text-xs flex flex-col justify-between">
-    <button onclick="window.modalManager?.closeActive()" class="absolute top-3 right-4 text-gray-400 hover:text-terminalGreen text-lg font-extralight transition-all transform hover:scale-110 z-20" title="Cerrar Panel">✕</button>
-    <div id="admin-panel-container" class="w-full">
-      <!-- Dynamic content rendered by admin_panel.js -->
-    </div>
-  </div>
+
 </body>
 </html>
 

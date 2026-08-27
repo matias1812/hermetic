@@ -87,7 +87,7 @@ export function renderGroupSidebar(openGroupChatCb) {
 }
 
 export function openGroupChat(grp, renderGroupSidebarCb, renderContactSidebarCb, renderMessagesCb) {
-    ['settings-modal', 'backup-modal', 'admin-panel-modal'].forEach(id => {
+    ['settings-modal', 'backup-modal'].forEach(id => {
         const m = document.getElementById(id);
         if (m && !m.classList.contains('hidden')) {
             m.classList.add('opacity-0');

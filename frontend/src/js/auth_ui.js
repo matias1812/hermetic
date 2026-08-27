@@ -805,17 +805,7 @@ export function setupSettingsDropdown() {
             }
             
             loadBackupsList();
-            
-            if (window.adminPanel) {
-                window.adminPanel.checkAdminStatus().then(isAdmin => {
-                    const btnAdmin = document.getElementById("btn-admin-panel");
-                    if (btnAdmin) {
-                        if (isAdmin) btnAdmin.classList.remove("hidden");
-                        else btnAdmin.classList.add("hidden");
-                    }
-                }).catch(() => {});
-            }
-            
+
             const toggleRead = document.getElementById("toggle-read-receipts");
             const toggleTyping = document.getElementById("toggle-typing-indicators");
             const toggleOnline = document.getElementById("toggle-online-status");

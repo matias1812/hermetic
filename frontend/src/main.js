@@ -38,7 +38,6 @@ import { setupRecoveryUI } from './js/recovery_ui.js';
 import { securityMonitor } from './js/security_monitor.js';
 import { hermesTour } from './js/onboarding_tour.js';
 import './js/group_crypto.js';
-import './js/admin_panel.js';
 import './js/privacy_settings.js';
 import './js/ui/theme_manager.js';
 import './js/ephemeral_audio.js';
@@ -287,7 +286,6 @@ function initApp() {
         ["setupRecoveryUI", setupRecoveryUI],
         ["setupMultiTabSynchronization", setupMultiTabSynchronization],
         ["setupFetchInterceptor", setupFetchInterceptor],
-        ["setupClientRouting", setupClientRouting],
         ["appInitializer", () => appInitializer.initialize()],
         ["tryRestoreSession", tryRestoreSession],
         ["AuthValidator", () => new AuthValidator()]
@@ -364,7 +362,7 @@ function setupNotificationToggle() {
  */
 function setupModalClickOutside() {
     const modalIds = [
-        'settings-modal', 'backup-modal', 'admin-panel-modal',
+        'settings-modal', 'backup-modal',
         'add-contact-modal', 'inspector-modal', 'disable-modal',
         'create-group-modal', 'edit-group-modal', 'add-member-modal',
         'onboarding-modal'
@@ -430,32 +428,3 @@ function setupFetchInterceptor() {
     };
 }
 
-function setupClientRouting() {
-    const checkRoute = async () => {
-        if (window.closeSettingsModal) window.closeSettingsModal();
-        const hash = window.location.hash || '';
-        if (hash.startsWith('#admin') || hash.startsWith('#dashboard')) {
-            if (!state.currentUser) {
-                showToast('Acceso denegado: Inicia sesión primero para acceder al panel', true);
-                window.location.hash = '';
-                return;
-            }
-            if (window.adminPanel) {
-                const isAdmin = await window.adminPanel.checkAdminStatus();
-                if (!isAdmin) {
-                    showToast('Acceso denegado: Se requiere rol de administrador E2E', true);
-                    window.location.hash = '';
-                    return;
-                }
-                const am = document.getElementById('admin-panel-modal');
-                if (am) {
-                    am.classList.remove('hidden');
-                    setTimeout(() => am.classList.remove('opacity-0'), 10);
-                    window.adminPanel.fetchStats();
-                }
-            }
-        }
-    };
-    window.addEventListener('hashchange', checkRoute);
-    window.addEventListener('load', () => setTimeout(checkRoute, 500));
-}

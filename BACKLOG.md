@@ -96,10 +96,23 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
    el volumen de tráfico actual, o si el modo actual (registro en memoria, un solo proceso)
    alcanza por ahora.
 
-6. **Panel de administrador sin backend real.** `admin_panel.js` ahora es fail-closed
-   (no otorga nada), pero no existe ninguna ruta admin-gated en `api.py`. Decidir: ¿se
-   construye autorización real emitida por el servidor, o se retira la UI del panel por
-   completo mientras no haga falta?
+~~6. **Panel de administrador sin backend real.**~~
+   **Resuelto (2026-08-27) — se retiró la UI.** Investigado antes de decidir: el gate
+   (`checkAdminStatus()`) era fail-closed permanente (`isAdmin = false` sin ninguna vía para
+   ponerlo en `true`), el botón y la ruta `#admin`/`#dashboard` por lo tanto eran
+   inalcanzables, `/api/debug/db_status` (de donde `loadStats()` intentaba leer) no existe
+   en el backend, y `this.stats`/`this.attackLogs` eran números fabricados en el
+   constructor. `makeAdmin()` tampoco llamaba al servidor -- solo escribía `role: 'admin'`
+   en storage local con una firma auto-computada que no protege nada. Es decir: no había
+   NINGUNA infraestructura real que autorizar, panel 100% inalcanzable, y su HTML afirmaba
+   "100% SECURE" y "Datos fehacientes en tiempo real" sobre datos inventados -- justo lo que
+   AGENTS.md prohíbe (afirmaciones de seguridad absolutas). Construir autorización real de
+   servidor solo para reactivar un dashboard de stats fabricadas no se justificaba. Eliminado
+   `admin_panel.js` y todas sus referencias (`main.js`: import, ruta de hash, entrada en
+   `setupClientRouting` -- la función entera quedaba vacía sin el admin panel, se borró
+   completa; `auth_ui.js`: el bloque que mostraba/ocultaba el botón; `chat_ui.js`/`group_ui.js`:
+   `admin-panel-modal` sacado de los arrays de cierre de modales; `index.html`: botón +
+   modal). Build de frontend limpio, bundle ~17 KB más chico.
 
 7. **`hermes_store.js` / `store/*.js` solo los ejercita un test manual.** Ningún archivo de
    UI real (`chat_ui.js`, `group_ui.js`, `auth_ui.js` salvo lectura) escribe a través de
