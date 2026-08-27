@@ -27,31 +27,33 @@ class BlindRelay:
         self,
         sender_hash: str,
         receiver_hash: str,
-        encrypted_blob: bytes,
+        encrypted_blob: bytes | bytearray,
         ttl_seconds: int = None
     ) -> str:
         """
         Retransmite blob cifrado sin entenderlo.
-        
+
         Returns:
             blob_id para confirmación
         """
         actual_ttl = ttl_seconds if ttl_seconds is not None else self.ttl
-        
+
         async with self.lock:
             # Generar ID ciego
             blob_id = hashlib.sha3_256(
                 f"{sender_hash}{receiver_hash}{time.time()}{self.blind_counter}".encode()
             ).hexdigest()[:16]
-            
+
             self.blind_counter += 1
-            
-            # Almacenar en RAM (NO en disco)
+
+            # bytearray, no bytes: para que _destroy_blob pueda zeroizar el buffer real
+            # (uno inmutable no se puede sobrescribir en memoria — copiarlo y zeroizar la
+            # copia no borra el original, que queda en el heap hasta que el GC lo recicle).
             self.pending_blobs[blob_id] = {
                 'id': blob_id,
                 'sender_hash': sender_hash,
                 'receiver_hash': receiver_hash,
-                'encrypted_data': encrypted_blob,
+                'encrypted_data': bytearray(encrypted_blob),
                 'created_at': time.time(),
                 'expires_at': time.time() + actual_ttl
             }
@@ -74,10 +76,13 @@ class BlindRelay:
             for blob_id, blob in list(self.pending_blobs.items()):
                 if blob['receiver_hash'] == receiver_hash:
                     if now <= blob['expires_at']:
+                        # bytes(...) copia — encrypted_data ahora es un bytearray mutable
+                        # que _destroy_blob va a zeroizar in-place más abajo; si devolviéramos
+                        # la misma referencia, el receptor legítimo recibiría puros ceros.
                         retrieved.append({
                             'id': blob['id'],
                             'sender_hash': blob['sender_hash'],
-                            'encrypted_data': blob['encrypted_data'],
+                            'encrypted_data': bytes(blob['encrypted_data']),
                             'created_at': blob['created_at']
                         })
                     to_delete.append(blob_id)
@@ -95,13 +100,21 @@ class BlindRelay:
         if blob_id in self.pending_blobs:
             blob = self.pending_blobs[blob_id]
             data = blob['encrypted_data']
-            
-            # Zeroizar datos en memoria para evitar recuperación residual en RAM
-            if isinstance(data, (bytes, bytearray)):
-                temp = bytearray(data)
-                for i in range(len(temp)):
-                    temp[i] = 0
-                blob['encrypted_data'] = bytes(temp)
+
+            # Zeroizar en el buffer real (bytearray, mutable) — no una copia. Antes esto
+            # copiaba a un bytearray temporal, zeroizaba SOLO la copia y descartaba el
+            # bytearray temporal, dejando el bytes() original sin tocar en el heap
+            # (bytes es inmutable: nunca se pudo sobrescribir en sitio). El log de
+            # "zeroized and destroyed" no reflejaba lo que realmente pasaba.
+            if isinstance(data, bytearray):
+                for i in range(len(data)):
+                    data[i] = 0
+            elif isinstance(data, bytes):
+                # Compatibilidad si algo externo todavía guarda bytes inmutable: no hay
+                # forma de zeroizar el buffer real; se documenta en vez de fingir que sí.
+                logger.warning(
+                    f"BLIND_RELAY | Blob {blob_id} stored as immutable bytes — cannot zeroize in place."
+                )
             
             # Eliminar referencia
             del self.pending_blobs[blob_id]

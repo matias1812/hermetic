@@ -630,7 +630,7 @@ async def relay_blob_endpoint(
     # Autenticación del relay: Bearer JWT (verificado en Depends(verify_session_token)).
     # La verificación SPHINCS+ fue eliminada — ver nota en RelayPayload.
 
-    blob_bytes = bytes.fromhex(payload.encrypted_blob_hex)
+    blob_bytes = bytearray.fromhex(payload.encrypted_blob_hex)
     nonce_token = await asyncio.to_thread(global_registry.claim_relay_nonce, blob_bytes)
     if not nonce_token:
         raise HTTPException(status_code=400, detail="Replay attack detected (envelope already relayed)")
@@ -929,7 +929,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     return
 
                 try:
-                    blob_bytes = bytes.fromhex(encrypted_blob_hex)
+                    blob_bytes = bytearray.fromhex(encrypted_blob_hex)
                 except ValueError:
                     await websocket.close(code=status.WS_1003_UNSUPPORTED_DATA, reason="Invalid encrypted_blob_hex")
                     return
