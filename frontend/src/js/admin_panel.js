@@ -10,6 +10,10 @@ export class AdminPanel {
      */
     constructor() {
         this.isAdmin = false;
+        // DATOS DE MUESTRA — no reflejan estado real del servidor. El backend no expone
+        // ninguna ruta de estadísticas/logs de administrador todavía; esto es un placeholder
+        // de UI para cuando exista ese endpoint. checkAdminStatus() ahora es fail-closed
+        // (ver comentario ahí), así que este panel no es alcanzable de todos modos.
         this.stats = {
             total_users: 14,
             online_users: 3,
@@ -28,43 +32,16 @@ export class AdminPanel {
     }
 
     async checkAdminStatus() {
-        if (!state.currentUser) return false;
-        const userId = typeof state.currentUser === 'string' ? state.currentUser : (state.currentUser.alias || '');
-        if (!userId) return false;
-        let userData = await state.storage.load(`user_${userId}`);
-        
-        const isBuiltInAdmin = userId.toLowerCase() === 'm4mbito' || userId.toLowerCase() === 'admin';
-        
-        if (isBuiltInAdmin) {
-            this.isAdmin = true;
-            if (!userData || userData.role !== 'admin' || !userData.admin_grant_sig) {
-                userData = userData || { alias: userId };
-                userData.role = 'admin';
-                userData.admin_grant_sig = await this._computeAdminSig(userId);
-                await state.storage.save(`user_${userId}`, userData);
-            }
-        } else if (userData?.role === 'admin') {
-            const expectedSig = await this._computeAdminSig(userId);
-            if (userData.admin_grant_sig !== expectedSig) {
-                console.warn(`[Security Alert] Intento no autorizado de escalada de privilegios detectado en el perfil @${userId}. Revocando rol ilegal.`);
-                userData.role = 'user';
-                delete userData.admin_grant_sig;
-                await state.storage.save(`user_${userId}`, userData);
-                this.isAdmin = false;
-                this.attackLogs.unshift({
-                    timestamp: Date.now(),
-                    type: 'ILLEGAL_PRIVILEGE_ESCALATION',
-                    detail: `Intento de falsificación del rol admin para @${userId}`,
-                    severity: 'critical',
-                    anonymous_ip: 'LOCAL_SANDBOX'
-                });
-            } else {
-                this.isAdmin = true;
-            }
-        } else {
-            this.isAdmin = false;
-        }
-
+        // Fail-closed intencional: no existe hoy ninguna autoridad del lado servidor que
+        // emita un rol de administrador (grep "admin" en hermes_backend/network_core/api.py
+        // no devuelve ninguna ruta) — cualquier chequeo de "admin" puramente local es, por
+        // definición, falseable por quien controla ese mismo cliente. La versión anterior
+        // de este método otorgaba admin automáticamente a cualquiera que se registrara con
+        // alias "admin" o "m4mbito", y "detectaba escalada de privilegios" comparando contra
+        // una firma auto-computada con la propia clave del usuario — que ese mismo usuario
+        // podía reproducir igual de fácil, así que tampoco protegía nada. Hasta que exista
+        // una autorización real emitida por el backend, este panel se mantiene inaccesible.
+        this.isAdmin = false;
         return this.isAdmin;
     }
 
