@@ -12,6 +12,13 @@
 - [x] **Auditoría Técnica PQC Integrada**: Generación empírica de evidencia de derivación Híbrida HKDF (Chaos Tests).
 - [x] **Atomic Locks & Persistencia ACID**: Web Locks API (`navigator.locks`) sobre IndexedDB.
 - [x] **Blind Relay Server**: Backend apátrida en Python.
+- [x] **ML-KEM-1024 real en el cliente web** *(2026-08-27)*: `generate_identity_keys()` generaba
+  X25519 disfrazado de "Kyber" — el cliente web nunca tuvo PQC real en el intercambio de
+  claves hasta esta fecha. Ver `BACKLOG.md`.
+- [x] **Autenticación HTTP/WS end-to-end** *(2026-08-27)*: `/api/login` y el handshake
+  WebSocket no verificaban ninguna prueba de posesión de clave privada — cualquiera que
+  supiera un alias podía autenticarse como esa cuenta. Cerrado y probado (`tests/test_login_auth.py`,
+  `tests/test_ws_auth.py`).
 
 ---
 
@@ -36,21 +43,28 @@
 
 ---
 
-## ?? Infraestructura y Seguridad (Core T�cnico)
+## 🔧 Infraestructura y Seguridad (Core Técnico)
 
-### Completado ?
-- X25519, Ed25519, Double Ratchet, ML-KEM
+### Completado ✅
+- X25519, Ed25519, Double Ratchet, ML-KEM-1024 (real, ver arriba)
 - ZeroizeOnDrop, CSP, DOMSanitizer, Web Locks
 - Auto Backup, Continuous Fuzzing (Nightly CI)
 - Supply Chain CI/CD (GitHub Actions), SBOM (CycloneDX)
+- Autenticación HTTP/WS (ver arriba)
 
-### Integrado Experimentalmente ??
+### Integrado Experimentalmente 🧪
 - ML-DSA (FIPS 204)
 - Reproducible Builds (Infra Docker)
 
-### Pendiente ?
-- Hybrid Ratchet PQC Completo
-- Auditor�a Externa Acreditada
+### Pendiente ⏳
+- Hybrid Ratchet PQC Completo (X3DH: falta guardar la clave privada ML-KEM generada en
+  `generate_prekey_bundle` y reemplazar el encapsulate simulado — ver `BACKLOG.md`)
+- Backend con estado real por usuario (contactos/grupos) para completar la reconciliación
+  post-pérdida-de-datos — UI ya lista, faltan `GET /api/user/state` y `DELETE /api/user/purge`
+- Compilar `rust/hermes_ffi_py` + Postgres/MySQL compartido para `HERMES_ENV=production` real
+- Auditoría Externa Acreditada
 - Firmado de artefactos (Sigstore / Cosign)
 - SLSA Level 3 compliance (Firma de procedencia)
+
+Ver **[`BACKLOG.md`](BACKLOG.md)** para el detalle priorizado de todo lo anterior.
 

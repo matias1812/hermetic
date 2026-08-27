@@ -3,6 +3,13 @@
 ## 🧾 Estado Actual
 **MVP Hardened / Candidate** — el backend FastAPI está endurecido con protección de API, WebSockets, validación de origen, límites de trama y sanitización de logs.
 
+**Auditoría 2026-08-27:** revisión completa del backend, el núcleo Rust/WASM y el frontend.
+Se encontraron y arreglaron dos bypasses completos de autenticación (`/api/login` y el
+handshake WebSocket no verificaban nada — ver `git log`), el cliente web pasó de usar
+X25519 disfrazado de "Kyber" a **ML-KEM-1024 real**, y se cerraron varias fugas de
+cifrado silencioso (bóveda local, multimedia, intercambio de claves de contacto/grupo).
+Detalle completo y lo que queda pendiente: **[`BACKLOG.md`](BACKLOG.md)**.
+
 ## 🚀 Resumen del Proyecto
 HermesChat es un servidor de relevo ciego que enruta mensajes cifrados de extremo a extremo sin almacenar claves privadas. El backend opera como un puente seguro para paquetes cifrados y firmas PQC, mientras la lógica de sesión y de cifrado se mantiene en el cliente nativo/FFI.
 
@@ -34,12 +41,21 @@ pip install maturin
 cd hermes_crypto_wasm
 maturin develop
 
-# Iniciar servidor con preflight audit
+# Iniciar servidor con preflight audit (uso local — abre navegador, corre
+# diagnósticos criptográficos interactivos, sirve dist/ si existe junto al backend)
 python main.py
 
-# O ejecutar directamente el app FastAPI
-uvicorn main:app --host 127.0.0.1 --port 8000
+# O ejecutar directamente el ASGI app (recomendado en producción — main.py NO es
+# el entrypoint de despliegue). --no-access-log es obligatorio: sin eso, uvicorn
+# imprime la IP real de cada cliente en stdout, sin pasar por PrivacyMiddleware.
+uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port 8000 --no-access-log
 ```
+
+## 🚀 Despliegue
+`Dockerfile.backend` + `render.yaml` — ver **[`BACKLOG.md`](BACKLOG.md)** para el estado
+actual y qué falta para un despliegue "producción real" (compilar `rust/hermes_ffi_py`,
+provisionar MySQL/Postgres, `HERMES_ENV=production`). El `Dockerfile` en la raíz del repo
+es para el build reproducible del WASM del cliente, **no** para correr el servidor.
 
 ## 📁 Documentación Clave
 - `docs/ARCHITECTURE.md` — arquitectura del sistema y flujo de envelope PQC.
