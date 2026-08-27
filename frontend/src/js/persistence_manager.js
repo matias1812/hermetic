@@ -2,12 +2,17 @@
 
 export class PersistenceManager {
     /**
-     * Gestor de persistencia COMPLETA en IndexedDB.
-     * 
-     * GARANTÍAS:
-     * - TODO se guarda en IndexedDB cifrado
-     * - Al recargar, todo se restaura automáticamente
-     * - NADA se pierde al hacer F5
+     * Gestor de persistencia en IndexedDB.
+     *
+     * ⚠️ AUDITORÍA (2026-08-27): save()/saveKey()/saveMessage()/etc. NO cifran nada —
+     * store.put(data) guarda los objetos tal cual, incluida privateKey en saveKey().
+     * Esta clase NO está conectada a la app real hoy (su único consumidor,
+     * store/hermes_store.js, nunca se instancia como window.hermesStore — grep
+     * confirma que esa asignación no existe en ningún lado del código). Antes de
+     * conectar esta clase a algo real, hay que replicar el patrón de storage_manager.js /
+     * media_storage.js: cifrar vía hermesBridge.encryptLocalDatabaseChunk (vault_key real)
+     * y mantener solo el campo `id` en claro (lo exige keyPath: 'id' de cada objectStore).
+     * NO asumir que "GARANTÍAS: TODO se guarda cifrado" es cierto solo porque lo dice acá.
      */
     
     constructor() {
