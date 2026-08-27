@@ -4,6 +4,20 @@ import { ConflictResolver } from './conflict_resolution.js';
 import { StateCompressor } from './state_compression.js';
 import { state } from './state.js';
 import { hermesBridge } from './crypto_wasm_bridge.js';
+import { CryptoClient } from './crypto_client.js';
+
+function bytesToHex(bytes) {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function hexToBytes(hex) {
+    return new Uint8Array((hex || '').match(/.{1,2}/g)?.map(b => parseInt(b, 16)) || []);
+}
+function getSessionAuthHeaders() {
+    const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+}
 
 export class CompleteRecoverySystem {
     /**
@@ -185,30 +199,67 @@ export class CompleteRecoverySystem {
     }
     
     async uploadBlob(payload) {
-        // En un entorno real esto sube a un endpoint de backups
-        const res = await fetch('/api/backup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        }).catch(() => null);
-        
-        if (res && res.ok) {
-            const data = await res.json();
-            return data.blob_id;
+        // Usa /api/backup real (mismo endpoint que backup_manager.js/auto_backup_trigger.js),
+        // no un /api/recovery_blob aparte que nunca existió en el backend.
+        const userHash = payload.userHash || state.storage.getUserId();
+        const timestamp = Math.floor(Date.now() / 1000);
+        const backupId = crypto.randomUUID();
+
+        try {
+            const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
+            const res = await fetch('/api/backup', {
+                method: 'POST',
+                headers: getSessionAuthHeaders(),
+                body: JSON.stringify({
+                    user_hash: userHash,
+                    encrypted_data_hex: bytesToHex(payload.ciphertext || []),
+                    backup_id: backupId,
+                    backup_type: 'recovery',
+                    parent_id: null,
+                    timestamp,
+                    signature,
+                    version: 1,
+                    algorithm: 'AES-GCM/RecoveryKey',
+                })
+            });
+            if (res.ok) return backupId;
+            console.warn('[Recovery] El servidor rechazó el backup:', res.status);
+        } catch (e) {
+            console.warn('[Recovery] No se pudo subir el backup a la nube:', e);
         }
-        // Fallback para dev local si el endpoint no existe
-        const dummyId = 'backup_' + Date.now();
-        localStorage.setItem(`hermes_dummy_backup_${dummyId}`, JSON.stringify(payload));
-        return dummyId;
+        // Fallback local si el servidor no está disponible (mismo dispositivo únicamente)
+        localStorage.setItem(`hermes_dummy_backup_${backupId}`, JSON.stringify(payload));
+        return backupId;
     }
 
     async downloadBlob(blobId) {
-        // En un entorno real esto baja de un endpoint de backups
-        const res = await fetch(`/api/backup/${blobId}`).catch(() => null);
-        if (res && res.ok) {
-            return await res.json();
+        // Usa /api/backup/fetch real. Ese endpoint devuelve TODOS los backups del
+        // usuario (no hay lookup por ID individual en el backend) — si blobId no
+        // coincide con ninguno (o es 'latest'), toma el más reciente.
+        try {
+            const userHash = state.storage.getUserId();
+            const timestamp = Math.floor(Date.now() / 1000);
+            const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
+            const res = await fetch('/api/backup/fetch', {
+                method: 'POST',
+                headers: getSessionAuthHeaders(),
+                body: JSON.stringify({ user_hash: userHash, timestamp, signature })
+            });
+            if (res.ok) {
+                const { backups } = await res.json();
+                if (backups && backups.length > 0) {
+                    const match = (blobId && blobId !== 'latest')
+                        ? backups.find(b => b.backup_id === blobId)
+                        : backups[backups.length - 1];
+                    if (match) {
+                        return { ciphertext: Array.from(hexToBytes(match.encrypted_data)) };
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[Recovery] No se pudo bajar el backup de la nube:', e);
         }
-        // Fallback local
+        // Fallback local (mismo dispositivo que hizo el backup)
         const local = localStorage.getItem(`hermes_dummy_backup_${blobId}`);
         if (local) return JSON.parse(local);
         throw new Error("Backup not found on server");

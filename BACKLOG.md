@@ -34,6 +34,10 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
   al importar si `dist/` (el frontend build) no estaba presente junto al backend.
 - Log de acceso nativo de uvicorn imprimía la IP real sin pasar por `PrivacyMiddleware` —
   ahora `--no-access-log` obligatorio, documentado en el Dockerfile.
+- Recovery por mnemónico y el backup remoto de `backup_manager.js` pegaban contra
+  `/api/recovery_blob` y `GET /api/backup/{id}`, ninguno existía — redirigidos a
+  `/api/backup`/`/api/backup/fetch` (reales), con firma y sesión reales. Wire format
+  verificado contra el backend (`tests/test_recovery_cloud_sync.py`).
 
 ## 🔴 Alta prioridad
 
@@ -45,19 +49,14 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
    usuario (membresía de contactos/grupos) para poder implementar la detección de
    discordancia. `persistence_manager.js` ya cifra correctamente lo que este flujo escriba.
 
-2. **Recovery por mnemónico — sincronización con la nube rota.**
-   `recovery_system_complete.js`'s `uploadBlob()`/`downloadBlob()` pegan contra
-   `/api/recovery_blob` y `GET /api/backup/{id}`, ninguno existe. Arreglo de bajo esfuerzo:
-   redirigir a `/api/backup` y `/api/backup/fetch` (ya funcionan, ya están probados) en vez
-   de mantener un endpoint separado. Hoy la recuperación por mnemónico es local-only.
+2. **Consolidar las 3 implementaciones de backup en la nube.**
+   `backup_manager.js`, `auto_backup_trigger.js` (duplica la lógica de subida en vez de
+   reusar `backup_manager.js`) y `recovery_system_complete.js` (mnemónico, sistema aparte)
+   ahora las tres pegan correctamente contra `/api/backup`/`/api/backup/fetch` — pero siguen
+   siendo tres implementaciones paralelas. Decidir cuál es la fuente de verdad y hacer que
+   las otras dos deleguen, en vez de mantener tres caminos independientes.
 
-3. **Consolidar las 3 implementaciones de backup en la nube.**
-   `backup_manager.js` (real, usa `/api/backup` correctamente) + `auto_backup_trigger.js`
-   (duplica la lógica de subida en vez de reusar `backup_manager.js`) +
-   `recovery_system_complete.js` (sistema aparte, ver punto 2). Decidir cuál es la fuente
-   de verdad y hacer que las otras dos deleguen, en vez de mantener tres caminos paralelos.
-
-4. **`hermes_ip_middleware` no se compila para Linux en el Docker del backend.**
+3. **`hermes_ip_middleware` no se compila para Linux en el Docker del backend.**
    Cae al fallback seguro (`0.0.0.0`, no filtra la IP real) pero pierde el comportamiento
    diseñado (último octeto en cero, útil para rate-limiting por rango). Agregar un stage de
    build Rust→`.so` en `Dockerfile.backend`, o aceptar el fallback como suficiente y
@@ -65,26 +64,26 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
 
 ## 🟡 Media prioridad
 
-5. **X3DH / `generate_prekey_bundle` incompleto.** Descarta la clave privada ML-KEM que
+4. **X3DH / `generate_prekey_bundle` incompleto.** Descarta la clave privada ML-KEM que
    genera, y el encapsulate contra la clave del receptor está simulado con bytes
    aleatorios en `create_session_from_bundle`. Código muerto hoy (nada de la UI lo llama —
    el camino real es `sync_manager.js` + `contact_accept`), pero con la infraestructura
    ML-KEM ya wireada (`seal_for_contact`/`open_from_contact`) completarlo es más rápido que
    antes, si se decide que vale la pena en vez de dejarlo como está.
 
-6. **`HERMES_ENV=production` nunca se probó de punta a punta.** Requiere compilar
+5. **`HERMES_ENV=production` nunca se probó de punta a punta.** Requiere compilar
    `rust/hermes_ffi_py` (registro anti-replay compartido vía SQL) y provisionar
    MySQL/Postgres real. Sin eso, `native_core.py` aborta el arranque por diseño
    (fail-closed) — no es un bug, es una decisión pendiente sobre si vale la inversión para
    el volumen de tráfico actual, o si el modo actual (registro en memoria, un solo proceso)
    alcanza por ahora.
 
-7. **Panel de administrador sin backend real.** `admin_panel.js` ahora es fail-closed
+6. **Panel de administrador sin backend real.** `admin_panel.js` ahora es fail-closed
    (no otorga nada), pero no existe ninguna ruta admin-gated en `api.py`. Decidir: ¿se
    construye autorización real emitida por el servidor, o se retira la UI del panel por
    completo mientras no haga falta?
 
-8. **`hermes_store.js` / `store/*.js` solo los ejercita un test manual.** Ningún archivo de
+7. **`hermes_store.js` / `store/*.js` solo los ejercita un test manual.** Ningún archivo de
    UI real (`chat_ui.js`, `group_ui.js`, `auth_ui.js` salvo lectura) escribe a través de
    `keysModule`/`chatModule`/`contactsModule`/`groupsModule` — es una capa de estado
    paralela a `state.js` que nunca terminó de reemplazarlo. Decidir: completar la migración
