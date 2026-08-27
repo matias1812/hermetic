@@ -14,10 +14,18 @@ class DatabaseError(Exception):
 class DatabaseConnection:
     """
     Conexión de base de datos hermética y mínima.
-    
+
     POLÍTICA:
-    - NUNCA persiste mensajes, contactos, ni grupos.
+    - NUNCA persiste contenido de mensajes, ni datos de contactos/grupos (nombre,
+      claves, historial). Eso vive solo cifrado en el dispositivo del usuario.
     - Registra únicamente hashes irreversibles de usuarios y hashes de sesión.
+    - user_relationships (2026-08-27, ver BACKLOG.md #1) es la única excepción
+      deliberada: un par (user_hash, target_id) opaco, para poder ofrecer
+      reconciliación si el usuario pierde su estado local. El cliente decide
+      explícitamente qué registrar (solo tras completar un handshake real, nunca
+      inferido de tráfico de relay) — es la MISMA relación que el servidor ya ve
+      transitoriamente en cada envelope relayado, solo que ahora persistida a
+      pedido explícito del cliente, no derivada unilateralmente por el servidor.
     - Fail-closed: errores → excepción.
     """
 
@@ -72,10 +80,23 @@ class DatabaseConnection:
                 ) ENGINE=InnoDB
             """)
 
+            # Relaciones opacas para reconciliación (ver docstring de la clase y BACKLOG.md #1).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_relationships (
+                    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                    user_hash VARCHAR(64) NOT NULL,
+                    relationship_type VARCHAR(16) NOT NULL,
+                    target_id VARCHAR(128) NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE KEY uniq_relationship (user_hash, relationship_type, target_id),
+                    INDEX idx_user_relationships_user_hash (user_hash)
+                ) ENGINE=InnoDB
+            """)
+
             conn.commit()
             cursor.close()
             conn.close()
-            
+
             self.is_mysql = True
             logger.info("Successfully connected to MySQL database.")
             print("  -> MySQL database connection established.")
@@ -115,6 +136,19 @@ class DatabaseConnection:
                 CREATE INDEX IF NOT EXISTS idx_cloud_backups_user_hash ON cloud_backups (user_hash)
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_relationships (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_hash TEXT NOT NULL,
+                    relationship_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    UNIQUE(user_hash, relationship_type, target_id)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_relationships_user_hash ON user_relationships (user_hash)
+            """)
 
             conn.commit()
             cursor.close()
@@ -335,6 +369,109 @@ class DatabaseConnection:
         except Exception as e:
             logger.error(f"Error getting cloud backups: {e}")
             return []
+        finally:
+            conn.close()
+
+    VALID_RELATIONSHIP_TYPES = ("contact", "group")
+
+    def add_relationship(self, user_hash: str, relationship_type: str, target_id: str) -> bool:
+        """Registra que user_hash tiene relationship_type ('contact'/'group') con
+        target_id. Idempotente — ya existente no es error."""
+        if relationship_type not in self.VALID_RELATIONSHIP_TYPES:
+            raise ValueError(f"relationship_type inválido: {relationship_type}")
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            now = int(time.time())
+            if self.is_mysql:
+                cursor.execute("""
+                    INSERT INTO user_relationships (user_hash, relationship_type, target_id, created_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE created_at = created_at
+                """, (user_hash, relationship_type, target_id, now))
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO user_relationships (user_hash, relationship_type, target_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                """, (user_hash, relationship_type, target_id, now))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error adding relationship: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def remove_relationship(self, user_hash: str, relationship_type: str, target_id: str) -> bool:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if self.is_mysql:
+                cursor.execute("""
+                    DELETE FROM user_relationships
+                    WHERE user_hash = %s AND relationship_type = %s AND target_id = %s
+                """, (user_hash, relationship_type, target_id))
+            else:
+                cursor.execute("""
+                    DELETE FROM user_relationships
+                    WHERE user_hash = ? AND relationship_type = ? AND target_id = ?
+                """, (user_hash, relationship_type, target_id))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error removing relationship: {e}")
+            return False
+        finally:
+            conn.close()
+
+    def get_relationships(self, user_hash: str) -> dict:
+        """Devuelve {'contacts': [target_id, ...], 'groups': [target_id, ...]}."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if self.is_mysql:
+                cursor.execute("""
+                    SELECT relationship_type, target_id FROM user_relationships WHERE user_hash = %s
+                """, (user_hash,))
+            else:
+                cursor.execute("""
+                    SELECT relationship_type, target_id FROM user_relationships WHERE user_hash = ?
+                """, (user_hash,))
+            rows = cursor.fetchall()
+            cursor.close()
+            result = {"contacts": [], "groups": []}
+            for rel_type, target_id in rows:
+                key = "contacts" if rel_type == "contact" else "groups"
+                result[key].append(target_id)
+            return result
+        except Exception as e:
+            logger.error(f"Error getting relationships: {e}")
+            return {"contacts": [], "groups": []}
+        finally:
+            conn.close()
+
+    def purge_relationships(self, user_hash: str) -> int:
+        """Borra TODAS las relaciones de user_hash (TRUNCATE-por-usuario, no DROP).
+        Devuelve cuántas se borraron."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if self.is_mysql:
+                cursor.execute("SELECT COUNT(*) FROM user_relationships WHERE user_hash = %s", (user_hash,))
+                count = cursor.fetchone()[0]
+                cursor.execute("DELETE FROM user_relationships WHERE user_hash = %s", (user_hash,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM user_relationships WHERE user_hash = ?", (user_hash,))
+                count = cursor.fetchone()[0]
+                cursor.execute("DELETE FROM user_relationships WHERE user_hash = ?", (user_hash,))
+            conn.commit()
+            cursor.close()
+            return count
+        except Exception as e:
+            logger.error(f"Error purging relationships: {e}")
+            raise DatabaseError("Purge relationships operation failed")
         finally:
             conn.close()
 

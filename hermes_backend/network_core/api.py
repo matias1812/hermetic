@@ -390,6 +390,10 @@ class BackupFetchRequest(BaseModel):
     timestamp: int
     signature: str
 
+class RelationshipRequest(BaseModel):
+    relationship_type: str  # 'contact' o 'group'
+    target_id: str
+
 class SignChallengeRequest(BaseModel):
     challenge: str
     sphincs_sk_hex: str
@@ -495,7 +499,11 @@ async def verify_client_signature(id_hash: str, timestamp: Optional[int], signat
 @app.post("/api/register")
 async def register_keys(request: Request, data: KeyRegistration):
     ip = request.state.blind_ip
-    if not rate_limiter.check_rest(ip, limit=50, window=60.0):
+    # Clave distinguida (_register) -- antes usaba `ip` pelada, la misma que /api/login
+    # y /api/verify, así que las tres compartían un solo balde de cuota sin darse cuenta
+    # (encontrado corriendo la suite de tests completa: logins legítimos empezaban a
+    # devolver 429 solo por los registros hechos antes en la misma corrida).
+    if not rate_limiter.check_rest(f"{ip}_register", limit=50, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
     # Validar formato del hash del cliente (SHA3-256 -> 64 hex chars)
@@ -543,7 +551,9 @@ async def clear_blobs_endpoint(
 @app.post("/api/login")
 async def login_user(request: Request, data: LoginRequest):
     ip = request.state.blind_ip
-    if not rate_limiter.check_rest(ip, limit=20, window=60.0):
+    # Clave distinguida (_login) -- ver comentario en /api/register: antes las tres
+    # rutas (/api/register, /api/login, /api/verify) compartían un solo balde de cuota.
+    if not rate_limiter.check_rest(f"{ip}_login", limit=20, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     user = db.get_user(data.client_id)
@@ -589,6 +599,83 @@ async def generate_keys_endpoint(alias: Optional[str] = None):
         return HermesNativeCore.generate_keys()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================
+# RECONCILIACIÓN (BACKLOG.md #1, 2026-08-27)
+# ============================================
+# El servidor no trackea contenido de contactos/grupos (nombre, claves, historial) —
+# eso vive solo cifrado en el dispositivo. Estas rutas registran ÚNICAMENTE un par
+# opaco (user_hash, target_id), y SOLO cuando el cliente decide explícitamente
+# registrarlo (tras completar un handshake real) — no se infiere nada de patrones
+# de tráfico de relay. Ver db_connection.py:DatabaseConnection docstring.
+#
+# IMPORTANTE: definidas ANTES de /api/user/{id_hash} más abajo — FastAPI resuelve
+# rutas en orden de registro, y {id_hash} matchea CUALQUIER segmento literal
+# (incluido "state"), así que si esto fuera después, /api/user/{id_hash} se comería
+# las requests a /api/user/state silenciosamente (devolvía 404 "User hash not
+# registered" en vez de 404 "Not Found" — parecía un error de ruta faltante,
+# en realidad era el handler equivocado).
+
+@app.post("/api/user/relationships")
+async def add_relationship_endpoint(
+    request: Request,
+    payload: RelationshipRequest,
+    session_id: str = Depends(verify_session_token)
+):
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{session_id}_{ip}_rel", limit=100, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if payload.relationship_type not in db.VALID_RELATIONSHIP_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid relationship_type")
+    if not db.add_relationship(session_id, payload.relationship_type, payload.target_id):
+        raise HTTPException(status_code=500, detail="Failed to add relationship")
+    return {"status": "success"}
+
+@app.delete("/api/user/relationships")
+async def remove_relationship_endpoint(
+    request: Request,
+    payload: RelationshipRequest,
+    session_id: str = Depends(verify_session_token)
+):
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{session_id}_{ip}_rel", limit=100, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    if payload.relationship_type not in db.VALID_RELATIONSHIP_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid relationship_type")
+    db.remove_relationship(session_id, payload.relationship_type, payload.target_id)
+    return {"status": "success"}
+
+@app.get("/api/user/state")
+async def get_user_state_endpoint(
+    request: Request,
+    session_id: str = Depends(verify_session_token)
+):
+    """Usado por reconciliation_manager.js para detectar contactos/grupos que el
+    servidor conoce pero el dispositivo local perdió."""
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{session_id}_{ip}_state", limit=60, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    rels = db.get_relationships(session_id)
+    return {
+        "contacts": [{"userId": t} for t in rels["contacts"]],
+        "groups": [{"groupId": t} for t in rels["groups"]],
+        "lastSeen": None,
+        "deviceCount": 1,
+    }
+
+@app.delete("/api/user/purge")
+async def purge_user_state_endpoint(
+    request: Request,
+    session_id: str = Depends(verify_session_token)
+):
+    """Despoblar (nunca DROP) las relaciones registradas del usuario — 'Empezar de
+    cero' en reconciliation_manager.js. No toca users/cloud_backups."""
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{session_id}_{ip}_purge", limit=5, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    count = db.purge_relationships(session_id)
+    return {"status": "success", "purged": count}
+
 
 @app.get("/api/user/{id_hash}")
 async def get_user_keys(id_hash: str):
@@ -763,7 +850,7 @@ async def fetch_blobs_endpoint(
 async def system_verification(request: Request):
     """Diagnóstico HONESTO del sistema compatible con test_endpoints.py."""
     ip = request.state.blind_ip
-    if not rate_limiter.check_rest(ip, limit=100, window=60.0):
+    if not rate_limiter.check_rest(f"{ip}_verify", limit=100, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
     return {
