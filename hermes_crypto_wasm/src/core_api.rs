@@ -488,7 +488,25 @@ impl HermesCore {
         )
     }
 
-    /// Cifrar base de datos local IndexedDB (Fase 3: Placeholder Vault Key)
+    /// Deriva la clave de cifrado de bóveda local vía HKDF a partir de vault_key,
+    /// con separación de dominio respecto a otros usos de vault_key (p.ej. backups).
+    fn derive_local_storage_key(&self) -> Result<[u8; 32], String> {
+        use hkdf::Hkdf;
+        use sha2::Sha256;
+
+        let vault_key = self
+            .vault_key
+            .ok_or_else(|| "Fail-Closed: bóveda bloqueada (unlock_vault no fue llamado)".to_string())?;
+
+        let hk = Hkdf::<Sha256>::new(None, &vault_key);
+        let mut storage_key = [0u8; 32];
+        hk.expand(b"Hermes Local Storage Key v1", &mut storage_key)
+            .map_err(|_| "Fail-Closed: fallo en derivación HKDF de la clave de bóveda local".to_string())?;
+        Ok(storage_key)
+    }
+
+    /// Cifra un chunk de la base de datos local (IndexedDB) con la vault_key real del
+    /// usuario (derivada con Argon2id en unlock_vault), nunca una clave pública fija.
     pub fn encrypt_local_database_chunk(&self, plaintext_json: &str) -> Result<Vec<u8>, String> {
         use chacha20poly1305::{
             aead::{Aead, KeyInit},
@@ -496,7 +514,8 @@ impl HermesCore {
         };
         use rand::RngCore;
 
-        let key = chacha20poly1305::Key::from_slice(b"hermes_vault_placeholder_key_32b");
+        let mut storage_key = self.derive_local_storage_key()?;
+        let key = chacha20poly1305::Key::from_slice(&storage_key);
         let cipher = XChaCha20Poly1305::new(key);
 
         let mut nonce_bytes = [0u8; 24];
@@ -507,6 +526,8 @@ impl HermesCore {
             .encrypt(nonce, plaintext_json.as_bytes())
             .map_err(|_| "Error cifrando chunk local".to_string())?;
 
+        storage_key.zeroize();
+
         let mut final_payload = Vec::with_capacity(nonce_bytes.len() + ciphertext.len());
         final_payload.extend_from_slice(&nonce_bytes);
         final_payload.extend_from_slice(&ciphertext);
@@ -514,7 +535,7 @@ impl HermesCore {
         Ok(final_payload)
     }
 
-    /// Descifrar base de datos local IndexedDB (Fase 3: Placeholder Vault Key)
+    /// Descifra un chunk de la base de datos local (IndexedDB) con la vault_key real.
     pub fn decrypt_local_database_chunk(&self, payload: &[u8]) -> Result<String, String> {
         use chacha20poly1305::{
             aead::{Aead, KeyInit},
@@ -525,7 +546,8 @@ impl HermesCore {
             return Err("Payload de BD local demasiado corto".to_string());
         }
 
-        let key = chacha20poly1305::Key::from_slice(b"hermes_vault_placeholder_key_32b");
+        let mut storage_key = self.derive_local_storage_key()?;
+        let key = chacha20poly1305::Key::from_slice(&storage_key);
         let cipher = XChaCha20Poly1305::new(key);
 
         let nonce = XNonce::from_slice(&payload[..24]);
@@ -534,6 +556,8 @@ impl HermesCore {
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
             .map_err(|_| "Fallo descifrando chunk local (StorageDecryptionError)".to_string())?;
+
+        storage_key.zeroize();
 
         String::from_utf8(plaintext).map_err(|_| "Chunk local no es UTF-8".to_string())
     }
