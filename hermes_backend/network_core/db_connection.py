@@ -56,7 +56,21 @@ class DatabaseConnection:
                     is_active BOOLEAN DEFAULT TRUE
                 ) ENGINE=InnoDB
             """)
-            
+
+            # Tabla de backups cifrados en la nube (save_cloud_backup/get_cloud_backups).
+            # Faltaba — /api/backup fallaba con 500 en cualquier entorno recién provisionado.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cloud_backups (
+                    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                    user_hash VARCHAR(64) NOT NULL,
+                    backup_id VARCHAR(128) NOT NULL,
+                    encrypted_data LONGTEXT NOT NULL,
+                    backup_type VARCHAR(32) NOT NULL,
+                    parent_id VARCHAR(128) NULL,
+                    timestamp INTEGER NOT NULL,
+                    INDEX idx_cloud_backups_user_hash (user_hash)
+                ) ENGINE=InnoDB
+            """)
 
             conn.commit()
             cursor.close()
@@ -85,7 +99,22 @@ class DatabaseConnection:
                     is_active BOOLEAN DEFAULT TRUE
                 )
             """)
-            
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cloud_backups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_hash TEXT NOT NULL,
+                    backup_id TEXT NOT NULL,
+                    encrypted_data TEXT NOT NULL,
+                    backup_type TEXT NOT NULL,
+                    parent_id TEXT,
+                    timestamp INTEGER NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cloud_backups_user_hash ON cloud_backups (user_hash)
+            """)
+
 
             conn.commit()
             cursor.close()

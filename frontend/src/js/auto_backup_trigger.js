@@ -1,5 +1,6 @@
 // frontend/src/js/auto_backup_trigger.js
 import { state, showToast } from './state.js';
+import { CryptoClient } from './crypto_client.js';
 
 export class AutoBackupTrigger {
     constructor(backupManager, recoverySystem) {
@@ -93,8 +94,8 @@ export class AutoBackupTrigger {
         const userId = state.storage.getUserId();
         const hexData = state.backup._bufferToHex(encryptedBuffer);
         const timestamp = Math.floor(Date.now()/1000);
-        // Simulamos firma para validación
-        const signature = "dummy_signature"; 
+        const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
+        const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
 
         const payload = {
             user_hash: userId,
@@ -106,9 +107,12 @@ export class AutoBackupTrigger {
             signature: signature
         };
 
+        const headers = { "Content-Type": "application/json" };
+        if (sessionToken) headers["Authorization"] = `Bearer ${sessionToken}`;
+
         const res = await fetch("/api/backup", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify(payload)
         });
 
