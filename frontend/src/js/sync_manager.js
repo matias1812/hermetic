@@ -434,7 +434,15 @@ export class SyncManager {
                 );
             } else {
                 // DM: retrieve sender sphincs pk and shared key
-                if (envelope.version === "v2" && envelope.ratchet_header) {
+                if (envelope.version === "sealed_v1" && envelope.sealed) {
+                    try {
+                        const plaintextBytes = hermesBridge.openFromContact(userKeys.kyber_sk, envelope.sealed);
+                        decryptedPlaintext = new TextDecoder().decode(new Uint8Array(plaintextBytes));
+                    } catch (errSealed) {
+                        console.warn(`[SyncManager] sealed_v1 decryption failed for ${senderId}:`, errSealed);
+                        return; // Fail-closed: no hay fallback débil para este tipo de envelope.
+                    }
+                } else if (envelope.version === "v2" && envelope.ratchet_header) {
                     try {
                         const ratchet = await this.getOrInitRatchet(senderId);
                         if (ratchet) {
@@ -824,7 +832,26 @@ export class SyncManager {
         const plaintext = JSON.stringify(payloadObj);
         let envelope = null;
 
-        if (!isGroup && payloadObj.type !== "contact_accept" && payloadObj.type !== "contact_request" && payloadObj.type !== "oob_verify") {
+        // contact_accept lleva el secreto que siembra toda la sesión futura con este
+        // contacto. Todavía no existe ratchet ni sharedKey establecida, así que NO puede
+        // caer en el fallback genérico (que cifraría con una clave AES fija y pública).
+        // Se sella con ML-KEM-1024 real contra la clave pública del receptor.
+        if (!isGroup && payloadObj.type === "contact_accept" && receiverKyberPk && receiverKyberPk !== "none") {
+            const plaintextBytes = new TextEncoder().encode(plaintext);
+            const sealedJson = hermesBridge.sealForContact(receiverKyberPk, plaintextBytes);
+            const timestamp = Math.floor(Date.now() / 1000);
+            const signatureHex = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
+            envelope = {
+                version: "sealed_v1",
+                sealed: sealedJson,
+                signature: signatureHex,
+                timestamp: timestamp,
+                sender_id: senderId || "",
+                receiver_id: receiverId || ""
+            };
+        }
+
+        if (!envelope && !isGroup && payloadObj.type !== "contact_accept" && payloadObj.type !== "contact_request" && payloadObj.type !== "oob_verify") {
             try {
                 const ratchet = await this.getOrInitRatchet(receiverId);
                 if (ratchet) {

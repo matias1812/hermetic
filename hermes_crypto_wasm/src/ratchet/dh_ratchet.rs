@@ -55,6 +55,67 @@ impl DHRatchet {
         Self::new_with_role(shared_secret, remote_public, None, None, true)
     }
 
+    /// Crear un ratchet derivando todo deterministicamente de un shared_secret.
+    ///
+    /// Usado cuando ambos peers comparten un secreto simétrico (ej: de Kyber KEM)
+    /// pero NO tienen las claves X25519 del otro. Las claves se derivan con labels
+    /// de rol invertidos: lo que Alice envía, Bob lo recibe, y viceversa.
+    ///
+    /// El DH efímero se activa tras el primer mensaje cuando el receptor ve
+    /// la clave pública X25519 del sender en el header cifrado.
+    pub fn new_from_shared_secret(shared_secret: &[u8; 32], is_alice: bool) -> Self {
+        let hkdf = Hkdf::<Sha512>::new(None, shared_secret);
+
+        let mut root_key = [0u8; 32];
+        let mut chain_key_alice = [0u8; 32];
+        let mut chain_key_bob = [0u8; 32];
+        let mut hk_alice = [0u8; HEADER_KEY_SIZE];
+        let mut hk_bob = [0u8; HEADER_KEY_SIZE];
+
+        hkdf.expand(b"hermetic_rk", &mut root_key).unwrap();
+        hkdf.expand(b"hermetic_ck_alice", &mut chain_key_alice).unwrap();
+        hkdf.expand(b"hermetic_ck_bob", &mut chain_key_bob).unwrap();
+        hkdf.expand(b"hermetic_hk_alice", &mut hk_alice).unwrap();
+        hkdf.expand(b"hermetic_hk_bob", &mut hk_bob).unwrap();
+
+        let our_dh = StaticSecret::random_from_rng(OsRng);
+        let our_public = PublicKey::from(&our_dh);
+
+        let mut state = RatchetState::new_with_role(shared_secret, is_alice);
+        state.root_key = root_key;
+        state.dh_private = our_dh.to_bytes();
+        state.dh_public = our_public.to_bytes();
+        state.dh_remote = None; // No hay clave remota hasta el primer mensaje
+
+        if is_alice {
+            // Alice envía con chain_key_alice y hk_alice.
+            // Alice recibe lo que Bob envía (chain_key_bob, hk_bob).
+            state.sending_chain_key = chain_key_alice;
+            state.receiving_chain_key = chain_key_bob;
+            state.header_key_send = hk_alice;
+            state.header_key_recv = hk_bob;
+            state.next_header_key_send = None;
+            state.next_header_key_recv = None;
+        } else {
+            // Bob recibe lo que Alice envía (chain_key_alice, hk_alice).
+            // Bob envía con chain_key_bob y hk_bob.
+            state.sending_chain_key = chain_key_bob;
+            state.receiving_chain_key = chain_key_alice;
+            state.header_key_send = hk_bob;
+            state.header_key_recv = hk_alice;
+            state.next_header_key_send = None;
+            state.next_header_key_recv = None;
+        }
+
+        // Zeroize intermedios
+        chain_key_alice.zeroize();
+        chain_key_bob.zeroize();
+        hk_alice.zeroize();
+        hk_bob.zeroize();
+
+        Self { state }
+    }
+
     /// Crear un nuevo ratchet con rol específico y opcional clave local DH
     pub fn new_with_role(
         shared_secret: &[u8; 32],
@@ -148,6 +209,7 @@ impl DHRatchet {
         // 3. Si hay nuevo DH público, avanzar receiving chain previa hasta header.pn y hacer DH Ratchet
         if header.dh_public != self.state.dh_remote.unwrap_or([0u8; 32]) {
             if let Some(prev_dh) = self.state.dh_remote {
+                // Hay un dh_remote previo → es un cambio de clave DH real: hacer ratchet completo
                 if header.pn >= self.state.message_number_recv + MAX_SKIP {
                     return Err(RatchetError::MessageTooFar(MAX_SKIP));
                 }
@@ -155,9 +217,14 @@ impl DHRatchet {
                     let mk = self.advance_receiving_chain();
                     self.skip_message_key_for_dh(prev_dh, self.state.message_number_recv - 1, &mk);
                 }
+                let remote_public = PublicKey::from(header.dh_public);
+                self.dh_ratchet(remote_public);
+            } else {
+                // dh_remote es None → primer mensaje recibido en sesión shared-secret.
+                // La receiving_chain_key ya está configurada por new_from_shared_secret.
+                // Solo registramos la clave pública del remoto para futuros ratchets.
+                self.state.dh_remote = Some(header.dh_public);
             }
-            let remote_public = PublicKey::from(header.dh_public);
-            self.dh_ratchet(remote_public);
         }
 
         // Si el número de mensaje es anterior al contador de recepción actual y no estaba en skipped_keys, rechazar como Replay

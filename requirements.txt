@@ -1,5 +1,9 @@
 # Core PQC — real ML-KEM-1024 and SPHINCS+ implementations
-pqcrypto>=0.17.0
+# PINNED (not >=): pqcrypto>=0.17.0 never existed on PyPI (latest pre-1.0 was 0.4.0) and
+# would fail to resolve on a clean install. pqcrypto>=1.0.0 is a Rust rewrite with a
+# different API (keygen/encaps/decaps vs generate_keypair/encrypt/decrypt used in
+# kyber_manager.py / sphincs_manager.py) — do not bump past 0.4.x without migrating those.
+pqcrypto==0.4.0
 
 # Symmetric crypto — AES-256-GCM (AEAD), HKDF
 cryptography>=42.0.0

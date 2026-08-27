@@ -328,54 +328,58 @@ impl HermesCore {
         local_sk_opt: Option<Vec<u8>>,
         local_pub_opt: Option<Vec<u8>>,
     ) -> bool {
-        let slice_to_pubkey = |bytes: &[u8]| -> Option<PublicKey> {
-            if bytes.len() == 32 {
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(bytes);
-                Some(PublicKey::from(arr))
-            } else if bytes.len() > 32 {
-                use sha2::{Digest, Sha256};
-                let mut hasher = Sha256::new();
-                hasher.update(bytes);
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&hasher.finalize());
-                Some(PublicKey::from(arr))
-            } else {
-                None
-            }
-        };
-
-        let remote_public = match slice_to_pubkey(remote_pub_key) {
-            Some(pk) => pk,
-            None => return false,
-        };
-        let local_public = local_pub_opt.as_deref().and_then(slice_to_pubkey);
-
         let mut shared_secret = [0u8; 32];
-        if let Some(ss) = shared_secret_opt {
+        if let Some(ss) = &shared_secret_opt {
             if ss.len() == 32 {
-                shared_secret.copy_from_slice(&ss);
+                shared_secret.copy_from_slice(ss);
             }
         }
 
-        let local_sk = local_sk_opt.and_then(|sk| {
+        // Determinar si tenemos claves X25519 reales (32 bytes exactos)
+        let local_sk = local_sk_opt.as_ref().and_then(|sk| {
             if sk.len() == 32 {
                 let mut arr = [0u8; 32];
-                arr.copy_from_slice(&sk);
+                arr.copy_from_slice(sk);
                 Some(arr)
             } else {
                 None
             }
         });
 
-        let ratchet = DHRatchet::new_with_role(
-            &shared_secret,
-            remote_public,
-            local_sk,
-            local_public,
-            is_alice,
-        );
-        self.sessions.insert(contact_id.to_string(), ratchet);
+        let has_real_x25519_local = local_sk.is_some();
+        let has_real_x25519_remote = remote_pub_key.len() == 32;
+
+        if has_real_x25519_local && has_real_x25519_remote {
+            // Ruta X3DH: ambos peers tienen claves X25519 reales
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(remote_pub_key);
+            let remote_public = PublicKey::from(arr);
+            let local_public = local_pub_opt.as_deref().and_then(|bytes| {
+                if bytes.len() == 32 {
+                    let mut a = [0u8; 32];
+                    a.copy_from_slice(bytes);
+                    Some(PublicKey::from(a))
+                } else {
+                    None
+                }
+            });
+
+            let ratchet = DHRatchet::new_with_role(
+                &shared_secret,
+                remote_public,
+                local_sk,
+                local_public,
+                is_alice,
+            );
+            self.sessions.insert(contact_id.to_string(), ratchet);
+        } else {
+            // Ruta shared-secret: sin claves X25519 reales (típico con claves Kyber).
+            // Derivar todo deterministicamente del shared_secret.
+            let ratchet = DHRatchet::new_from_shared_secret(&shared_secret, is_alice);
+            self.sessions.insert(contact_id.to_string(), ratchet);
+        }
+
+        shared_secret.zeroize();
         true
     }
 
@@ -796,23 +800,137 @@ impl HermesCore {
     /// Genera las llaves de Identidad localmente en WASM (X25519 y Ed25519)
     pub fn generate_identity_keys(&self) -> Result<String, String> {
         use ed25519_dalek::SigningKey;
+        use ml_kem::{KeyExport, MlKem1024};
         use rand::rngs::OsRng;
-        use x25519_dalek::StaticSecret;
 
-        let ik = StaticSecret::random_from_rng(OsRng);
-        let ik_pk = x25519_dalek::PublicKey::from(&ik);
+        // Semilla de 64 bytes: serialización preferida por el crate para el par ML-KEM
+        // (más compacta que la clave de decapsulación expandida, y consistente con el
+        // patrón ya usado en generate_prekey_bundle/DecapsulationKey::from_seed).
+        let mut seed_bytes = [0u8; 64];
+        rand::RngCore::fill_bytes(&mut OsRng, &mut seed_bytes);
+        let dk = ml_kem::DecapsulationKey::<MlKem1024>::from_seed(seed_bytes.into());
+        let ek = dk.encapsulation_key();
 
         let sign_k = SigningKey::generate(&mut OsRng);
         let sign_pk = sign_k.verifying_key();
 
         let result = format!(
             r#"{{"kyber_sk_hex":"{}","kyber_pk_hex":"{}","sphincs_sk_hex":"{}","sphincs_pk_hex":"{}"}}"#,
-            hex::encode(ik.to_bytes()),
-            hex::encode(ik_pk.as_bytes()),
+            hex::encode(seed_bytes),
+            hex::encode(ek.to_bytes()),
             hex::encode(sign_k.to_bytes()),
             hex::encode(sign_pk.to_bytes())
         );
+        seed_bytes.zeroize();
         Ok(result)
+    }
+
+    /// Sella `plaintext` para que solo el titular de `recipient_kyber_pk_hex` pueda abrirlo.
+    /// ML-KEM-1024 (encapsulate) -> HKDF-SHA512 -> AES-256-GCM, tal como documenta
+    /// docs/ARCHITECTURE.md. Operación transaccional completa (AGENTS.md): no expone
+    /// encapsulate/derive_key como primitivas sueltas hacia JS.
+    pub fn seal_for_contact(
+        &self,
+        recipient_kyber_pk_hex: &str,
+        plaintext: &[u8],
+    ) -> Result<String, JsValue> {
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::{Aes256Gcm, Key, Nonce};
+        use hkdf::Hkdf;
+        use ml_kem::kem::Encapsulate;
+        use ml_kem::{EncapsulationKey, MlKem1024};
+        use sha2::Sha512;
+
+        let pk_bytes = hex::decode(recipient_kyber_pk_hex)
+            .map_err(|_| JsValue::from_str("Fail-Closed: recipient_kyber_pk_hex no es hexadecimal válido"))?;
+        let pk_array = pk_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| JsValue::from_str("Fail-Closed: longitud de clave pública ML-KEM-1024 inválida"))?;
+        let ek = EncapsulationKey::<MlKem1024>::new(&pk_array)
+            .map_err(|_| JsValue::from_str("Fail-Closed: clave pública ML-KEM-1024 inválida"))?;
+
+        let (ct, shared_secret) = ek.encapsulate();
+
+        let hkdf = Hkdf::<Sha512>::new(None, &shared_secret);
+        let mut aes_key_bytes = [0u8; 32];
+        hkdf.expand(b"hermetic_contact_seal_v1", &mut aes_key_bytes)
+            .map_err(|_| JsValue::from_str("Fail-Closed: fallo en derivación HKDF"))?;
+
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let mut nonce_bytes = [0u8; 12];
+        rand::RngCore::fill_bytes(&mut OsRng, &mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|_| JsValue::from_str("Fail-Closed: fallo cifrando AES-256-GCM"))?;
+
+        aes_key_bytes.zeroize();
+
+        let result = serde_json::json!({
+            "kyber_ct_hex": hex::encode(ct.as_slice()),
+            "nonce_hex": hex::encode(nonce_bytes),
+            "ciphertext_hex": hex::encode(ciphertext),
+        });
+        Ok(result.to_string())
+    }
+
+    /// Abre un mensaje sellado con `seal_for_contact` usando la clave de decapsulación
+    /// local (la semilla ML-KEM de 64 bytes devuelta por generate_identity_keys).
+    pub fn open_from_contact(
+        &self,
+        local_kyber_sk_hex: &str,
+        sealed_json: &str,
+    ) -> Result<Vec<u8>, JsValue> {
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::{Aes256Gcm, Key, Nonce};
+        use hkdf::Hkdf;
+        use ml_kem::kem::Decapsulate;
+        use ml_kem::{DecapsulationKey, MlKem1024};
+        use sha2::Sha512;
+
+        let sealed: serde_json::Value = serde_json::from_str(sealed_json)
+            .map_err(|_| JsValue::from_str("Fail-Closed: JSON de envelope sellado inválido"))?;
+        let get_hex = |field: &str| -> Result<Vec<u8>, JsValue> {
+            let s = sealed
+                .get(field)
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| JsValue::from_str(&format!("Fail-Closed: falta campo '{}'", field)))?;
+            hex::decode(s).map_err(|_| JsValue::from_str(&format!("Fail-Closed: '{}' no es hex válido", field)))
+        };
+
+        let seed_bytes = hex::decode(local_kyber_sk_hex)
+            .map_err(|_| JsValue::from_str("Fail-Closed: local_kyber_sk_hex no es hexadecimal válido"))?;
+        let seed: ml_kem::Seed = seed_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| JsValue::from_str("Fail-Closed: longitud de semilla ML-KEM inválida (se esperan 64 bytes)"))?;
+        let dk = DecapsulationKey::<MlKem1024>::from_seed(seed);
+
+        let ct_bytes = get_hex("kyber_ct_hex")?;
+        let shared_secret = dk
+            .decapsulate_slice(&ct_bytes)
+            .map_err(|_| JsValue::from_str("Fail-Closed: ciphertext ML-KEM inválido"))?;
+
+        let hkdf = Hkdf::<Sha512>::new(None, &shared_secret);
+        let mut aes_key_bytes = [0u8; 32];
+        hkdf.expand(b"hermetic_contact_seal_v1", &mut aes_key_bytes)
+            .map_err(|_| JsValue::from_str("Fail-Closed: fallo en derivación HKDF"))?;
+
+        let key = Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        let nonce_bytes = get_hex("nonce_hex")?;
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = get_hex("ciphertext_hex")?;
+
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_slice())
+            .map_err(|_| JsValue::from_str("Fail-Closed: fallo descifrando AES-256-GCM (clave incorrecta o manipulación)"))?;
+
+        aes_key_bytes.zeroize();
+        Ok(plaintext)
     }
 
     /// Firma localmente el desafío del WebSocket con la llave privada Ed25519

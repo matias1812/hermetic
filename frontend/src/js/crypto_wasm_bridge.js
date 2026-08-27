@@ -208,6 +208,21 @@ export class RealHermesCrypto {
         return this.rustCrypto.decrypt_legacy_payload(encryptedPackage, sessionKeyHex);
     }
 
+    // Sellado ML-KEM-1024 real contra la clave pública de un contacto — usado para
+    // proteger secretos de bootstrap (p.ej. el shared_key de contact_accept) que no
+    // pueden depender de un canal ya establecido, porque todavía no existe ninguno.
+    sealForContact(recipientKyberPkHex, plaintextBytes) {
+        this._assertReady('sealForContact');
+        console.debug("[HermesBridge] sealForContact -> recipient pk len:", recipientKyberPkHex?.length);
+        return this.rustCrypto.seal_for_contact(recipientKyberPkHex, plaintextBytes);
+    }
+
+    openFromContact(localKyberSkHex, sealedJson) {
+        this._assertReady('openFromContact');
+        console.debug("[HermesBridge] openFromContact");
+        return this.rustCrypto.open_from_contact(localKyberSkHex, sealedJson);
+    }
+
     createGroup(groupId, memberIds) {
         this._assertReady('createGroup');
         console.debug("[HermesBridge] createGroup -> id:", groupId);

@@ -82,6 +82,8 @@ if (typeof window !== 'undefined') {
         if (tabName === 'all') {
             if (groupsSec) groupsSec.style.display = '';
             if (contactsSec) contactsSec.style.display = '';
+            if (reqSec) reqSec.style.display = '';
+            if (pendSec) pendSec.style.display = '';
         } else if (tabName === 'groups') {
             if (groupsSec) groupsSec.style.display = '';
             if (contactsSec) contactsSec.style.display = 'none';
@@ -90,6 +92,8 @@ if (typeof window !== 'undefined') {
         } else if (tabName === 'contacts') {
             if (groupsSec) groupsSec.style.display = 'none';
             if (contactsSec) contactsSec.style.display = '';
+            if (reqSec) reqSec.style.display = '';
+            if (pendSec) pendSec.style.display = '';
         }
     };
 
