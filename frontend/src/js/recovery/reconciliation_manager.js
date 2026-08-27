@@ -30,16 +30,14 @@ export class ReconciliationManager {
      * 3. Sistema verifica con el servidor si hay estado de membresía
      * 4. Si hay discordancia → ofrece 3 opciones al usuario
      *
-     * PENDIENTE (2026-08-27, ver backlog): loadServerState()/startFresh() pegan
-     * contra GET /api/user/state y DELETE /api/user/purge, ninguno existe en el
-     * backend — hoy checkForDiscrepancy() corre en cada login real (evento
-     * hermes:logged_in) pero siempre sale temprano porque el fetch a
-     * /api/user/state falla y serverState queda null. La UI (modal con 4
-     * opciones) está completa; falta que el backend trackee membresía de
-     * contactos/grupos por usuario para poder implementar esos dos endpoints.
-     * persistence_manager.js ya cifra correctamente lo que este flujo termine
-     * escribiendo (hermesStore.dispatch('GROUP_CREATED'/'CONTACT_ADDED', ...)),
-     * así que completar el backend es lo único que falta.
+     * Backend real desde 2026-08-27 (ver BACKLOG.md #1): GET /api/user/state y
+     * DELETE /api/user/purge existen y checkForDiscrepancy() (en cada login real,
+     * evento hermes:logged_in) los usa de verdad. El servidor solo se entera de una
+     * relación contacto/grupo por registro EXPLÍCITO post-handshake — nunca
+     * infiriéndolo del tráfico del relay — disparado desde SyncManager.registerRelationship()
+     * en los 4 puntos donde un handshake real se completa: aceptar/recibir
+     * contact_accept (chat_ui.js/sync_manager.js) y crear/recibir group_invite
+     * (group_ui.js/sync_manager.js).
      */
     
     constructor() {

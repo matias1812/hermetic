@@ -41,13 +41,17 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
 
 ## 🔴 Alta prioridad
 
-1. **Reconciliación post-pérdida-de-datos — falta el backend.**
-   `reconciliation_manager.js` está enganchado a un evento real (`hermes:logged_in`, dispara
-   en cada login) y tiene la UI completa (modal con 4 opciones: recovery key, archivo de
-   backup, resincronizar, empezar de cero). Depende de `GET /api/user/state` y
-   `DELETE /api/user/purge`, ninguno existe. Requiere decidir qué trackea el backend por
-   usuario (membresía de contactos/grupos) para poder implementar la detección de
-   discordancia. `persistence_manager.js` ya cifra correctamente lo que este flujo escriba.
+~~1. **Reconciliación post-pérdida-de-datos — falta el backend.**~~
+   **Resuelto (2026-08-27).** Diseño elegido: registro explícito post-handshake (nunca
+   inferido del tráfico del relay). Backend: tabla `user_relationships` +
+   `POST`/`DELETE /api/user/relationships`, `GET /api/user/state`, `DELETE /api/user/purge`
+   (`db_connection.py`/`api.py`, 8 tests en `tests/test_reconciliation.py`). Frontend:
+   `SyncManager.registerRelationship()` disparado en los 4 puntos donde un handshake se
+   completa de verdad — aceptar contacto (`chat_ui.js::acceptContactRequest`) y recibir
+   `contact_accept` (`sync_manager.js`), crear grupo (`group_ui.js::createGroup`) y recibir
+   `group_invite` (`sync_manager.js`). De paso se encontró y arregló un bug de rate-limit:
+   `/api/register`, `/api/login` y `/api/verify` compartían un solo balde de cuota (la IP
+   pelada como key en los tres) — cada uno tiene ahora su propia key.
 
 2. **Consolidar las 3 implementaciones de backup en la nube.**
    `backup_manager.js`, `auto_backup_trigger.js` (duplica la lógica de subida en vez de

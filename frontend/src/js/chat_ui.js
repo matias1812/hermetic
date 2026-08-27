@@ -260,6 +260,7 @@ export async function acceptContactRequest(senderId) {
             type: "contact_accept",
             shared_key: sharedKeyHex
         });
+        await state.sync.registerRelationship('contact', senderId);
 
         showToast(`Contacto @${senderId} aceptado`);
         renderContactSidebar();

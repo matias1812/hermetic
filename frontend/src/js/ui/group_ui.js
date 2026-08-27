@@ -229,6 +229,7 @@ export async function createGroup(name, memberIds, renderGroupSidebarCb) {
                 symmetric_key: groupKeyHex
             });
         }
+        await state.sync.registerRelationship('group', id);
 
         showToast(`Grupo #${name} creado con éxito`);
         const modal = document.getElementById('create-group-modal');

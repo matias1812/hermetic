@@ -219,6 +219,26 @@ export class SyncManager {
         if (this.websocket) this.websocket.close();
     }
 
+    // Registro explícito post-handshake (BACKLOG #1): el servidor solo se entera de una
+    // relación contacto/grupo cuando el cliente se lo dice acá, DESPUÉS de que el
+    // handshake ya se completó de verdad (contact_accept recibido/enviado, group_invite
+    // recibido/creado) -- nunca infiriéndolo del tráfico del relay (blind relay no debe
+    // saber quién habla con quién). Best-effort: si falla, la reconciliación simplemente
+    // no va a ver esta relación más adelante, pero no debe romper el flujo de chat/grupo.
+    async registerRelationship(relationshipType, targetId) {
+        try {
+            const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+            if (!token) return;
+            await fetch('/api/user/relationships', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ relationship_type: relationshipType, target_id: targetId })
+            });
+        } catch (e) {
+            console.warn(`[SyncManager] No se pudo registrar relación (${relationshipType}:${targetId}) para reconciliación:`, e);
+        }
+    }
+
     async fetchPendingBlobs() {
         const idHash = this.storage.getUserId();
         const userKeys = await this.getOrRecoverUserKeys();
@@ -640,9 +660,10 @@ export class SyncManager {
             } 
             else if (payload.type === "contact_accept") {
                 await this.contacts.acceptRequest(this.storage, senderId, payload.shared_key);
+                await this.registerRelationship('contact', senderId);
                 document.dispatchEvent(new Event("contacts_updated"));
                 if (window._hermesShowToast) window._hermesShowToast(`🎉 ¡@${senderId} aceptó tu solicitud de contacto!`, false);
-            } 
+            }
             else if (payload.type === "contact_reject") {
                 await this.contacts.rejectRequest(this.storage, senderId);
                 document.dispatchEvent(new Event("contacts_updated"));
@@ -687,6 +708,7 @@ export class SyncManager {
                     payload.members,
                     payload.symmetric_key
                 );
+                await this.registerRelationship('group', payload.group_id);
                 await this.chats.addMessage(this.storage, payload.group_id, {
                     id: envelope.signature,
                     sender: 'system',
