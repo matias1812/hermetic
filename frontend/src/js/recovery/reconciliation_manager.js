@@ -23,12 +23,23 @@ async function getCurrentUserHash() {
 export class ReconciliationManager {
     /**
      * Sistema de reconciliación para usuarios que vuelven sin backup.
-     * 
+     *
      * FLUJO:
      * 1. Usuario se registra (mismo alias)
      * 2. Sistema detecta que NO tiene contactos/grupos locales
      * 3. Sistema verifica con el servidor si hay estado de membresía
      * 4. Si hay discordancia → ofrece 3 opciones al usuario
+     *
+     * PENDIENTE (2026-08-27, ver backlog): loadServerState()/startFresh() pegan
+     * contra GET /api/user/state y DELETE /api/user/purge, ninguno existe en el
+     * backend — hoy checkForDiscrepancy() corre en cada login real (evento
+     * hermes:logged_in) pero siempre sale temprano porque el fetch a
+     * /api/user/state falla y serverState queda null. La UI (modal con 4
+     * opciones) está completa; falta que el backend trackee membresía de
+     * contactos/grupos por usuario para poder implementar esos dos endpoints.
+     * persistence_manager.js ya cifra correctamente lo que este flujo termine
+     * escribiendo (hermesStore.dispatch('GROUP_CREATED'/'CONTACT_ADDED', ...)),
+     * así que completar el backend es lo único que falta.
      */
     
     constructor() {

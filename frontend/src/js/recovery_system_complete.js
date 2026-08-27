@@ -7,14 +7,24 @@ import { hermesBridge } from './crypto_wasm_bridge.js';
 
 export class CompleteRecoverySystem {
     /**
-     * Sistema de recuperación COMPLETO.
-     * 
+     * Sistema de recuperación por frase mnemónica (12 palabras).
+     *
      * INTEGRA:
      * - RecoveryKeyDerivation (PBKDF2 600K)
      * - StateVersionControl (Vector Clock)
      * - ConflictResolver (Last-Write-Wins + Merge)
      * - StateCompressor (GZIP)
      * - AutoBackupSystem (cada 5 min + en cambios)
+     *
+     * LIMITACIÓN CONOCIDA (2026-08-27): uploadBlob()/downloadBlob() pegan contra
+     * /api/recovery_blob y GET /api/backup/{id}, ninguno de los dos existe en el
+     * backend — ambos tienen try/catch que degradan a un fallback local
+     * (localStorage) sin avisar al usuario que la sincronización con la nube no
+     * ocurrió. Por ahora esta recuperación es LOCAL-ONLY: sirve para restaurar en
+     * el mismo dispositivo (o desde un blob que el usuario exportó a mano), no para
+     * sincronizar entre dispositivos vía servidor. Si se necesita eso, la ruta más
+     * corta es redirigir uploadBlob/downloadBlob a /api/backup y /api/backup/fetch
+     * (esos sí existen, están probados) en vez de inventar un endpoint nuevo.
      */
     
     constructor() {

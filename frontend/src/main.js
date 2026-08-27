@@ -47,7 +47,6 @@ import { chatSelector } from './js/chat_selector.js';
 import { verifier } from './js/messaging_tests.js';
 import './js/crypto_wasm_bridge.js';
 import './js/timing_verifier.js';
-import './js/screenshot_shield_pro.js';
 import './js/double_ratchet.js';
 import './js/audio_engine_pro.js';
 import './js/admin_pro.js';
