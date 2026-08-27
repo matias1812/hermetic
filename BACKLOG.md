@@ -56,11 +56,11 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
    siendo tres implementaciones paralelas. Decidir cuál es la fuente de verdad y hacer que
    las otras dos deleguen, en vez de mantener tres caminos independientes.
 
-3. **`hermes_ip_middleware` no se compila para Linux en el Docker del backend.**
-   Cae al fallback seguro (`0.0.0.0`, no filtra la IP real) pero pierde el comportamiento
-   diseñado (último octeto en cero, útil para rate-limiting por rango). Agregar un stage de
-   build Rust→`.so` en `Dockerfile.backend`, o aceptar el fallback como suficiente y
-   documentarlo explícitamente en vez de que sea un detalle implícito.
+~~3. **`hermes_ip_middleware` no se compila para Linux en el Docker del backend.**~~
+   **Resuelto (2026-08-27).** `Dockerfile.backend` ahora tiene un stage `rust:1.80-slim-bookworm`
+   que compila el `.so` (crate mínimo, solo `libc`, ~9s de build) y lo copia a la imagen final.
+   Verificado en un container real: sin el fix, log `CRITICAL PRIVACY FAILURE... 0.0.0.0`
+   en cada request; con el fix, la IP real se zeroniza correctamente (último octeto en 0).
 
 ## 🟡 Media prioridad
 

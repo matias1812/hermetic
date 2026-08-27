@@ -9,6 +9,18 @@
 # pqcrypto==0.4.0 (ver requirements.txt) tiene wheel manylinux para cp313 — no hace
 # falta toolchain de compilación acá. NO usar pqcrypto>=1.0.0: es una reescritura con
 # API distinta (keygen/encaps/decaps) incompatible con kyber_manager.py/sphincs_manager.py.
+
+# Stage 1: compilar hermes_ip_middleware (anonimización de IP) para Linux. Sin esto,
+# privacy_middleware.py no encuentra el .so y cae a un fallback más ciego (0.0.0.0 para
+# TODOS los clientes en vez de zeronotizar el último octeto) — seguro (no filtra la IP
+# real) pero pierde el comportamiento diseñado. Crate mínimo (solo depende de libc),
+# compila en segundos.
+FROM rust:1.80-slim-bookworm AS ip_middleware_builder
+WORKDIR /build
+COPY hermes_ip_middleware/ ./hermes_ip_middleware/
+WORKDIR /build/hermes_ip_middleware
+RUN cargo build --release
+
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -17,6 +29,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY hermes_backend/ ./hermes_backend/
+
+# privacy_middleware.py busca esto en <repo_root>/hermes_ip_middleware/target/release/
+COPY --from=ip_middleware_builder \
+    /build/hermes_ip_middleware/target/release/libhermes_ip_middleware.so \
+    ./hermes_ip_middleware/target/release/libhermes_ip_middleware.so
 
 # HERMES_ENV se deja SIN fijar acá a propósito. hermes_backend/crypto_core/native_core.py
 # aborta el arranque (fail-closed) si HERMES_ENV=production y no está compilado el
