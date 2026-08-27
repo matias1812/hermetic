@@ -196,6 +196,34 @@ class ReplayRegistry:
     def release_relay_nonce(self, nonce: bytes, token: bytes) -> None:
         self._release(self.DOMAIN_RELAY, nonce, token)
 
+    def revoke_jti(self, jti: str, ttl_seconds: int) -> None:
+        """Revoca un token de sesión por su JTI (logout). ttl_seconds debe ser el tiempo
+        de vida restante del token — no tiene sentido recordar la revocación más allá
+        de cuando el token hubiera expirado igual.
+
+        NOTA: en memoria de proceso únicamente (self.memory_cache), igual que el resto
+        del fallback no-nativo de este registro — no se comparte entre workers/procesos.
+        Con HERMES_REPLAY_BACKEND=sql (hermes_ffi) heredaría persistencia compartida
+        real; sin eso, revocar en una instancia con múltiples workers no cubre las demás.
+        """
+        with self._lock:
+            now = time.time()
+            self._revoked_jtis = getattr(self, "_revoked_jtis", {})
+            self._revoked_jtis[jti] = now + max(0, ttl_seconds)
+
+    def is_jti_revoked(self, jti: str) -> bool:
+        revoked = getattr(self, "_revoked_jtis", None)
+        if not revoked:
+            return False
+        with self._lock:
+            expires_at = revoked.get(jti)
+            if expires_at is None:
+                return False
+            if time.time() > expires_at:
+                del revoked[jti]
+                return False
+            return True
+
 # Mantenemos OTPKeyRegistry para compatibilidad con código existente (HermesNativeCore) 
 # temporalmente, pero re-enrutando al nuevo domain_envelope
 class OTPKeyRegistryAdapter:

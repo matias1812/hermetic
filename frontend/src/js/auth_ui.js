@@ -569,6 +569,22 @@ export async function doLoginTransition(alias, password) {
 }
 
 export async function executeWipeLogout() {
+    // Revocar el token de sesión en el servidor — sin esto queda válido hasta su
+    // expiración natural (8h) aunque el usuario haya cerrado sesión explícitamente.
+    try {
+        const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+        if (sessionToken) {
+            await fetch("/api/logout", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${sessionToken}` }
+            });
+        }
+        sessionStorage.removeItem('hermes_session_token');
+        localStorage.removeItem('hermes_session_token');
+    } catch (e) {
+        console.warn("[Auth] No se pudo revocar el token de sesión al salir:", e);
+    }
+
     // Si la configuración requiere vaciar mensajes al salir, lo hacemos ANTES de borrar las llaves de memoria
     if (window.privacySettings && window.privacySettings.settings.serverMessageDeletion === 'on_logout' && state.currentUser && state.userKeys) {
         try {

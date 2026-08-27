@@ -87,12 +87,13 @@ def generate_session_token(id_hash: str) -> str:
     return f"{payload}:{signature}"
 
 
-def verify_session_token(authorization: Optional[str] = Header(None)) -> str:
-    """Dependency de FastAPI para proteger endpoints vía Bearer Token.
-    
-    Verifica: formato correcto → HMAC válido → TTL no expirado → JTI no reutilizado.
-    El JTI se consume en el ReplayRegistry con TTL residual del token — un token robado
-    no puede reutilizarse aunque su HMAC sea válido.
+def _parse_and_verify_session_token(authorization: Optional[str]) -> tuple[str, str, int]:
+    """Verifica formato → HMAC → TTL → no-revocado. Devuelve (id_hash, jti, expires_at).
+
+    El token es un bearer reutilizable durante toda la sesión (TTL 8h por defecto) —
+    no es de un solo uso; eso es normal para un token de sesión, no una debilidad de
+    anti-replay. Lo que sí protege un token robado es: expiración corta y revocación
+    explícita al logout (ver revoke_session_token / global_registry.revoke_jti).
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(
@@ -124,13 +125,21 @@ def verify_session_token(authorization: Optional[str] = Header(None)) -> str:
     if not hmac.compare_digest(signature, expected_signature):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session signature")
 
-    # El JTI está incluido en el payload firmado — aporta unicidad estructural al token
-    # (imposible fabricar dos tokens con el mismo JTI y HMAC válido con SESSION_SECRET distinto).
-    # No se consume en el ReplayRegistry por request: el mismo token se reutiliza durante toda
-    # la sesión (TTL 8h). El anti-replay de envelopes individuales lo cubre claim_relay_nonce.
-    # Hook para revocación futura en logout: global_registry.revoke_jti(jti).
+    if global_registry.is_jti_revoked(jti):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session revoked")
 
+    return id_hash, jti, expires_at
+
+
+def verify_session_token(authorization: Optional[str] = Header(None)) -> str:
+    """Dependency de FastAPI para proteger endpoints vía Bearer Token."""
+    id_hash, _jti, _expires_at = _parse_and_verify_session_token(authorization)
     return id_hash
+
+
+def verify_session_token_with_jti(authorization: Optional[str] = Header(None)) -> tuple[str, str, int]:
+    """Como verify_session_token, pero expone (id_hash, jti, expires_at) — para logout."""
+    return _parse_and_verify_session_token(authorization)
 
 
 app = FastAPI(title="HermesChat v7.0 Blindado - Zero Knowledge PQC Relay")
@@ -562,6 +571,15 @@ async def login_user(request: Request, data: LoginRequest):
     except Exception as e:
         logger.error(f"Login failure: {e}")
         raise HTTPException(status_code=500, detail="Authentication processing error")
+
+@app.post("/api/logout")
+async def logout_user(session: tuple[str, str, int] = Depends(verify_session_token_with_jti)):
+    """Revoca el token de sesión actual — cierra la ventana de exposición si el
+    token fue robado, en vez de dejarlo válido hasta su expiración natural (8h)."""
+    id_hash, jti, expires_at = session
+    remaining_ttl = max(0, int(expires_at - time.time()))
+    global_registry.revoke_jti(jti, remaining_ttl)
+    return {"status": "success", "revoked": True}
 
 @app.get("/api/generate_keys")
 async def generate_keys_endpoint(alias: Optional[str] = None):
