@@ -22,6 +22,10 @@ pub struct HermesCore {
     mldsa_secret_seed: Option<[u8; 32]>, // Nuevo: Semilla secreta para PQC ML-DSA-44
     spk_secret: Option<[u8; 32]>,
     opk_secrets: HashMap<String, [u8; 32]>,
+    /// Semilla de 64 bytes de la clave de decapsulación ML-KEM-768 del PreKeyBundle
+    /// vigente (rota junto con spk_secret en cada generate_prekey_bundle). Sin esto,
+    /// accept_session_handshake no puede decapsular el ciphertext real que manda Alice.
+    pqc_prekey_seed: Option<[u8; 64]>,
 
     /// Estado de las sesiones de chat activas (Double Ratchet)
     /// Key: contact_id
@@ -55,6 +59,9 @@ impl Drop for HermesCore {
         if let Some(mut k) = self.spk_secret {
             k.zeroize();
         }
+        if let Some(mut k) = self.pqc_prekey_seed {
+            k.zeroize();
+        }
         for val in self.opk_secrets.values_mut() {
             val.zeroize();
         }
@@ -76,6 +83,7 @@ impl HermesCore {
             mldsa_secret_seed: None,
             spk_secret: None,
             opk_secrets: HashMap::new(),
+            pqc_prekey_seed: None,
             sessions: HashMap::new(),
             groups: HashMap::new(),
         }
@@ -135,6 +143,9 @@ impl HermesCore {
         if let Some(mut key) = self.spk_secret.take() {
             key.zeroize();
         }
+        if let Some(mut key) = self.pqc_prekey_seed.take() {
+            key.zeroize();
+        }
         for (_, mut key) in self.opk_secrets.drain() {
             key.zeroize();
         }
@@ -167,7 +178,10 @@ impl HermesCore {
         let mut sign_sec = self.signing_secret.unwrap();
         let mut mldsa_sec = self.mldsa_secret_seed.unwrap();
 
-        // Integrar generación real de llaves ML-KEM-768.
+        // Generación real de llaves ML-KEM-768. La semilla se guarda en self.pqc_prekey_seed
+        // (rota junto con spk_secret cada vez que se llama esta función) -- sin guardarla,
+        // accept_session_handshake no tiene forma de reconstruir la clave de decapsulación
+        // para el ciphertext real que manda Alice en create_session_from_bundle.
         let mut rng = rand::rngs::OsRng;
         let mut seed_bytes = [0u8; 64];
         rand::RngCore::fill_bytes(&mut rng, &mut seed_bytes);
@@ -176,11 +190,10 @@ impl HermesCore {
 
         let pqc_pk_bytes = ek.to_bytes().to_vec();
 
-        // TODO: Store dk internally so we can decapsulate later. We need to store dk.to_bytes() in `self` or similar.
-        // For the sake of this architectural test and evidence generation without breaking the state machine,
-        // we will embed a deterministic stub for dk ONLY if it's missing, but wait, we can store it in a new field or just
-        // ignore it for the initiator test. Wait, the receiver needs it!
-        // The receiver (Bob) generates the bundle and stores the secret.
+        if let Some(mut old_seed) = self.pqc_prekey_seed.take() {
+            old_seed.zeroize();
+        }
+        self.pqc_prekey_seed = Some(seed_bytes);
 
         let (bundle, mut spk_sec, opk_sec_opt) = generate_prekey_bundle(
             &ik_sec,
@@ -200,6 +213,7 @@ impl HermesCore {
         sign_sec.zeroize();
         mldsa_sec.zeroize();
         spk_sec.zeroize();
+        seed_bytes.zeroize();
 
         serde_json::to_string(&bundle)
             .map_err(|e| JsValue::from_str(&format!("Error serializando PreKeyBundle: {}", e)))
@@ -219,26 +233,26 @@ impl HermesCore {
         }
         let ik_sec = self.ik_secret.unwrap();
 
-        // ML-KEM Encapsulate real contra bundle.pqc_public_key
-        let _ek_bytes = bundle.pqc_public_key.clone();
-        // Fallback or parse error
-        let mut pqc_ciphertext_out = vec![0u8; 1088];
-        let mut pqc_shared_secret_out = vec![0u8; 32];
+        // ML-KEM-768 Encapsulate real contra bundle.pqc_public_key (antes simulado con
+        // bytes aleatorios + SHA-256, sin protección PQC real -- cualquiera que viera el
+        // "ciphertext" en tránsito podía recalcular el mismo hash).
+        use ml_kem::kem::Encapsulate;
+        use ml_kem::{EncapsulationKey, MlKem768};
 
-        // In real execution, we parse `ek_bytes` into EncapsulationKey and call encapsulate()
-        let mut rng = rand::rngs::OsRng;
-        rand::RngCore::fill_bytes(&mut rng, &mut pqc_ciphertext_out);
-
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&pqc_ciphertext_out);
-        pqc_shared_secret_out.copy_from_slice(&hasher.finalize());
+        let pk_array = bundle
+            .pqc_public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| JsValue::from_str("Fail-Closed: longitud de clave pública ML-KEM-768 inválida"))?;
+        let ek = EncapsulationKey::<MlKem768>::new(&pk_array)
+            .map_err(|_| JsValue::from_str("Fail-Closed: clave pública ML-KEM-768 inválida"))?;
+        let (pqc_ciphertext, pqc_shared_secret) = ek.encapsulate();
 
         let (mut sk, handshake) = initiator_x3dh(
             &ik_sec,
             &bundle,
-            &pqc_ciphertext_out,
-            &pqc_shared_secret_out,
+            pqc_ciphertext.as_slice(),
+            &pqc_shared_secret,
         )
         .map_err(|e| JsValue::from_str(&e))?;
 
@@ -249,7 +263,6 @@ impl HermesCore {
         self.sessions.insert(contact_id.to_string(), ratchet);
 
         sk.zeroize();
-        pqc_shared_secret_out.zeroize();
 
         serde_json::to_string(&handshake)
             .map_err(|e| JsValue::from_str(&format!("Error serializando InitialHandshake: {}", e)))
@@ -276,11 +289,20 @@ impl HermesCore {
             .as_ref()
             .and_then(|id| self.opk_secrets.remove(id));
 
-        let mut pqc_shared_secret = vec![0u8; 32];
-        use sha2::Digest;
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&handshake.pqc_ciphertext);
-        pqc_shared_secret.copy_from_slice(&hasher.finalize());
+        // Decapsulate ML-KEM-768 real contra el ciphertext que mandó Alice (antes se
+        // "derivaba" con SHA-256 del propio ciphertext, que viaja en claro -- cualquiera
+        // en el camino podía recalcular el mismo valor, sin protección PQC real).
+        let pqc_seed = match self.pqc_prekey_seed {
+            Some(s) => s,
+            None => return false,
+        };
+        use ml_kem::kem::Decapsulate;
+        use ml_kem::{DecapsulationKey, MlKem768};
+        let dk = DecapsulationKey::<MlKem768>::from_seed(pqc_seed.into());
+        let pqc_shared_secret = match dk.decapsulate_slice(&handshake.pqc_ciphertext) {
+            Ok(ss) => ss,
+            Err(_) => return false,
+        };
 
         let mut sk = match responder_x3dh(
             &ik_sec,
@@ -300,7 +322,6 @@ impl HermesCore {
         self.sessions.insert(contact_id.to_string(), ratchet);
 
         sk.zeroize();
-        pqc_shared_secret.zeroize();
         if let Some(mut k) = opk_sec {
             k.zeroize();
         }

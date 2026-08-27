@@ -73,12 +73,21 @@ diagnóstico completo (qué estaba mal, por qué, cómo se verificó) en el mens
 
 ## 🟡 Media prioridad
 
-4. **X3DH / `generate_prekey_bundle` incompleto.** Descarta la clave privada ML-KEM que
-   genera, y el encapsulate contra la clave del receptor está simulado con bytes
-   aleatorios en `create_session_from_bundle`. Código muerto hoy (nada de la UI lo llama —
-   el camino real es `sync_manager.js` + `contact_accept`), pero con la infraestructura
-   ML-KEM ya wireada (`seal_for_contact`/`open_from_contact`) completarlo es más rápido que
-   antes, si se decide que vale la pena en vez de dejarlo como está.
+~~4. **X3DH / `generate_prekey_bundle` incompleto.**~~
+   **Resuelto (2026-08-27).** `generate_prekey_bundle` ahora guarda la semilla ML-KEM-768
+   (rota junto con `spk_secret` en cada llamada, campo nuevo `pqc_prekey_seed` en
+   `HermesCore`, zeroizado en `Drop`/`close_session`). `create_session_from_bundle` hace
+   encapsulate real contra `bundle.pqc_public_key` (antes: bytes aleatorios + SHA-256, sin
+   protección PQC real — cualquiera que viera el ciphertext en tránsito podía recalcular el
+   mismo "secreto" sin ninguna clave privada). `accept_session_handshake` decapsula de
+   verdad con la semilla guardada (antes: SHA-256 del propio ciphertext público). Nuevo test
+   `hermes_crypto_wasm/tests/x3dh_pqc_test.rs`: prueba positiva (Alice y Bob derivan la
+   misma root key) + prueba negativa (una clave de decapsulación distinta deriva una root
+   key distinta — la evidencia de que el secreto depende de verdad de la clave privada, no
+   solo del ciphertext público). 14/14 tests del crate pasan (`wasm-pack test --node`).
+   Sigue siendo código no wireado a la UI (el camino real de la app es `sync_manager.js` +
+   `contact_accept`/`seal_for_contact`) — pero ya no es código fantasma que aparenta
+   protección PQC sin darla.
 
 5. **`HERMES_ENV=production` nunca se probó de punta a punta.** Requiere compilar
    `rust/hermes_ffi_py` (registro anti-replay compartido vía SQL) y provisionar
