@@ -1,6 +1,6 @@
+use rand::{RngExt, rng};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use rand::{rng, RngExt};
 
 use crate::errors::ReplayError;
 use crate::replay::model::{ClaimToken, ReplayState, SignatureHash};
@@ -59,7 +59,10 @@ impl ReplayStore for InMemoryReplayStore {
         now: u64,
         ttl_seconds: u64,
     ) -> Result<ClaimToken, ReplayError> {
-        let mut map = self.cache.lock().map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
+        let mut map = self
+            .cache
+            .lock()
+            .map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
         self.prune_expired(&mut map, now);
 
         if map.len() >= MAX_ENTRIES {
@@ -75,10 +78,10 @@ impl ReplayStore for InMemoryReplayStore {
             hash: signature_hash,
         };
 
-        if let Some(entry) = map.get(&key) {
-            if entry.expires_at > now {
-                return Err(ReplayError::AlreadyClaimed);
-            }
+        if let Some(entry) = map.get(&key)
+            && entry.expires_at > now
+        {
+            return Err(ReplayError::AlreadyClaimed);
         }
 
         let token = Self::generate_token();
@@ -102,8 +105,11 @@ impl ReplayStore for InMemoryReplayStore {
         now: u64,
         ttl_seconds: u64,
     ) -> Result<(), ReplayError> {
-        let mut map = self.cache.lock().map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
-        
+        let mut map = self
+            .cache
+            .lock()
+            .map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
+
         let key = Key {
             domain: domain.to_string(),
             hash: signature_hash,
@@ -134,7 +140,10 @@ impl ReplayStore for InMemoryReplayStore {
         now: u64,
         ttl_seconds: u64,
     ) -> Result<(), ReplayError> {
-        let mut map = self.cache.lock().map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
+        let mut map = self
+            .cache
+            .lock()
+            .map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
 
         let key = Key {
             domain: domain.to_string(),
@@ -164,7 +173,10 @@ impl ReplayStore for InMemoryReplayStore {
         signature_hash: SignatureHash,
         token: ClaimToken,
     ) -> Result<(), ReplayError> {
-        let mut map = self.cache.lock().map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
+        let mut map = self
+            .cache
+            .lock()
+            .map_err(|_| ReplayError::StorageError("Mutex poisoned".into()))?;
 
         let key = Key {
             domain: domain.to_string(),

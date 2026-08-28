@@ -7,6 +7,7 @@ import os
 import asyncio
 import re
 import uuid
+import base64
 from typing import Any, Optional, List, Dict, Set
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +24,8 @@ from hermes_backend.network_core.blind_relay import BlindRelay
 from hermes_backend.network_core.amnesia_enforcer import AmnesiaEnforcer
 from hermes_backend.network_core.load_balancer import ConnectionLimiter, RateLimiter
 from hermes_backend.network_core.otp_registry import global_registry
+from hermes_backend.network_core.ephemeral_media_store import EphemeralImageStore
+from hermes_backend.crypto_core.image_encryptor import ImageEncryptor
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +187,7 @@ class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         # Límite por defecto: 100KB para señalización/auth
         limit = 100 * 1024
-        if path == "/api/relay" or path == "/api/backup":
+        if path == "/api/relay" or path == "/api/backup" or path == "/api/media/group-ephemeral-image":
             # 10MB máximo para blobs cifrados/medios
             limit = 10 * 1024 * 1024
             
@@ -204,7 +207,12 @@ class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
 
 allowed_origins_env = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+    # 5174/5175/5176 cubren el caso común de Vite eligiendo otro puerto porque 5173 ya
+    # estaba ocupado (--strictPort no está seteado) -- sin esto, el WS de tiempo real
+    # cae 403 en silencio y todo el mensajeo degrada a polling REST sin ningún aviso.
+    "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,"
+    "http://localhost:5175,http://127.0.0.1:5175,http://localhost:5176,http://127.0.0.1:5176"
 )
 allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",") if origin.strip()]
 if not allowed_origins:
@@ -262,6 +270,14 @@ conn_limiter = ConnectionLimiter(
     max_new_per_second=10
 )
 rate_limiter = RateLimiter()
+
+# Custodia temporal server-side de imágenes efímeras de GRUPO únicamente (excepción
+# consciente y acotada al modelo zero-knowledge general: ver BACKLOG.md). No hay
+# registro de membresía de grupo en el backend, así que member_ids/group_id son
+# provistos por el cliente al subir -- mismo nivel de confianza que sendGroupBlob ya
+# tiene hoy sobre a quién reenviar.
+image_store = EphemeralImageStore()
+MAX_EPHEMERAL_IMAGE_BYTES = 6 * 1024 * 1024
 
 # Gestor de conexiones WebSocket activas
 class BlindWSManager:
@@ -390,9 +406,31 @@ class BackupFetchRequest(BaseModel):
     timestamp: int
     signature: str
 
+class RecoveryProofRegister(BaseModel):
+    user_hash: str
+    proof_hex: str
+
+class RecoveryFetchRequest(BaseModel):
+    id_hash: str
+    proof_hex: str
+
 class RelationshipRequest(BaseModel):
     relationship_type: str  # 'contact' o 'group'
     target_id: str
+
+class GroupEphemeralImageUpload(BaseModel):
+    user_hash: str
+    group_id: str
+    member_ids: List[str]
+    image_data_b64: str
+
+class GroupEphemeralImageFetch(BaseModel):
+    user_hash: str
+    image_id: str
+
+class GroupEphemeralImageViewed(BaseModel):
+    user_hash: str
+    image_id: str
 
 class SignChallengeRequest(BaseModel):
     challenge: str
@@ -746,6 +784,19 @@ async def relay_blob_endpoint(
             encrypted_bytes,
             ttl_seconds=payload.ttl_seconds
         )
+        # Observabilidad del fallback: sin esto, un WS roto (ALLOWED_ORIGINS mal seteado,
+        # límite de conexiones, etc.) degrada TODO el mensajeo a polling en silencio -- ver
+        # BACKLOG.md. No distingue "receptor real offline" (esperado) de "WS debería estar
+        # arriba y no lo está" a propósito -- eso requeriría saber si el receptor tiene una
+        # sesión activa, que este endpoint no chequea; es una señal para monitoreo agregado,
+        # no una alerta por mensaje.
+        audit_event(
+            event_type="WS_DELIVERY_FALLBACK",
+            client_ip=ip,
+            client_id=payload.receiver_hash,
+            detail="Entrega vía polling (blind_relay), no WebSocket en tiempo real",
+            level="info",
+        )
 
     return {
         "status": "success",
@@ -808,6 +859,162 @@ async def fetch_backups_endpoint(
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
         
     backups = db.get_cloud_backups(req.user_hash)
+    return {"status": "success", "backups": backups}
+
+@app.post("/api/media/group-ephemeral-image")
+async def upload_group_ephemeral_image_endpoint(
+    request: Request,
+    payload: GroupEphemeralImageUpload,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != payload.user_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with user_hash")
+
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{payload.user_hash}_{ip}_geimg_up", limit=10, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    if not payload.member_ids:
+        raise HTTPException(status_code=400, detail="member_ids required")
+    if not payload.image_data_b64.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="Invalid image data URL")
+
+    try:
+        _, b64_content = payload.image_data_b64.split(",", 1)
+        raw_bytes = base64.b64decode(b64_content, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed base64 image data")
+
+    if len(raw_bytes) > MAX_EPHEMERAL_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image too large")
+
+    # Se cifra el data URL completo (no solo los bytes crudos de la imagen) para que
+    # el fetch devuelva exactamente lo que el cliente necesita para img.src, sin
+    # tener que reconstruir el prefijo "data:image/...;base64," por separado.
+    plaintext = payload.image_data_b64.encode("utf-8")
+    aes_key = ImageEncryptor.generate_key()
+    encrypted = ImageEncryptor.encrypt(plaintext, aes_key)
+
+    image_id = str(uuid.uuid4())
+    image_store.store_image(
+        image_id=image_id,
+        encrypted_data=encrypted["ciphertext"],
+        nonce=encrypted["nonce"],
+        aes_key=aes_key,
+        sender_id=payload.user_hash,
+        member_ids=payload.member_ids,
+        group_id=payload.group_id,
+    )
+    return {"status": "success", "image_id": image_id}
+
+@app.post("/api/media/group-ephemeral-image/fetch")
+async def fetch_group_ephemeral_image_endpoint(
+    request: Request,
+    payload: GroupEphemeralImageFetch,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != payload.user_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with user_hash")
+
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{payload.user_hash}_{ip}_geimg_fetch", limit=30, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    entry = image_store.get_image(payload.image_id, requester_id=payload.user_hash)
+    if entry is None:
+        audit_event(
+            event_type="AUTHORIZATION_FAILED",
+            client_ip=ip,
+            client_id=payload.user_hash,
+            detail="group ephemeral image fetch denied or not found",
+            level="warning",
+        )
+        raise HTTPException(status_code=404, detail="Image not found or not authorized")
+
+    return {
+        "status": "success",
+        "ciphertext_hex": entry["data"].hex(),
+        "nonce_hex": entry["nonce"].hex(),
+        "key_hex": entry["aes_key"].hex(),
+    }
+
+@app.post("/api/media/group-ephemeral-image/viewed")
+async def mark_group_ephemeral_image_viewed_endpoint(
+    request: Request,
+    payload: GroupEphemeralImageViewed,
+    session_id: str = Depends(verify_session_token)
+):
+    if session_id != payload.user_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with user_hash")
+
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{payload.user_hash}_{ip}_geimg_viewed", limit=30, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    deleted = image_store.mark_viewed(payload.image_id, payload.user_hash)
+    return {"status": "success", "deleted": deleted}
+
+@app.post("/api/recovery/register-proof")
+async def register_recovery_proof_endpoint(
+    request: Request,
+    payload: RecoveryProofRegister,
+    session_id: str = Depends(verify_session_token)
+):
+    """
+    Guarda el "proof" derivado de la frase de recuperación (HKDF, ver
+    core_api.rs derive_recovery_proof) — requiere sesión activa porque solo se
+    llama justo después de generar/verificar la frase con la cuenta ya
+    logueada. Este proof es lo único que permite después /api/recovery/fetch
+    SIN sesión (para el caso real "perdí el dispositivo").
+    """
+    if session_id != payload.user_hash:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Session identity mismatch with user_hash")
+
+    if not re.match(r"^[a-fA-F0-9]{64}$", payload.proof_hex):
+        raise HTTPException(status_code=400, detail="Invalid proof format")
+
+    ip = request.state.blind_ip
+    if not rate_limiter.check_rest(f"{payload.user_hash}_{ip}_recovproof", limit=10, window=60.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    updated = db.set_recovery_proof(payload.user_hash, payload.proof_hex)
+    if not updated:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success"}
+
+@app.post("/api/recovery/fetch")
+async def recovery_fetch_endpoint(request: Request, req: RecoveryFetchRequest):
+    """
+    Recuperación SIN sesión previa: autentica comparando el proof recién
+    derivado (client-side, a partir de las 12 palabras) contra el que quedó
+    guardado la última vez que esta cuenta tuvo sesión activa — nunca un
+    Bearer token ni una firma de las claves de identidad (que es justo lo que
+    se perdió junto con el dispositivo). Zero-knowledge: el servidor jamás ve
+    la frase mnemónica ni la clave de cifrado del backup, solo este proof.
+    """
+    ip = request.state.blind_ip
+    # Límite estricto: a diferencia de /api/backup/fetch (con sesión), acá
+    # cualquiera puede intentar id_hash+proof al voleo — el proof en sí tiene
+    # 256 bits de entropía real (inviable de fuerza bruta), pero igual conviene
+    # no dejar la puerta abierta a intentos ilimitados.
+    if not rate_limiter.check_rest(f"{req.id_hash}_{ip}_recovfetch", limit=5, window=300.0):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    if not re.match(r"^[a-fA-F0-9]{64}$", req.id_hash) or not re.match(r"^[a-fA-F0-9]{64}$", req.proof_hex):
+        raise HTTPException(status_code=400, detail="Invalid request format")
+
+    stored_proof = db.get_recovery_proof(req.id_hash)
+    if not stored_proof or not hmac.compare_digest(stored_proof, req.proof_hex):
+        audit_event(
+            event_type="AUTHENTICATION_FAILED",
+            client_ip=ip,
+            client_id=req.id_hash,
+            detail="recovery proof mismatch",
+            level="warning"
+        )
+        raise HTTPException(status_code=401, detail="Invalid recovery proof")
+
+    backups = db.get_cloud_backups(req.id_hash)
     return {"status": "success", "backups": backups}
 
 @app.get("/api/status/{client_id}")

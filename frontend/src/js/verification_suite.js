@@ -3,6 +3,7 @@ import { realCrypto } from './crypto_wasm_bridge.js';
 import { RealDoubleRatchet } from './double_ratchet.js';
 import { testDoubleRatchet } from './tests/double_ratchet_test.js';
 import { fullFlowSuite } from './tests/full_flow_test.js';
+import { state } from './state.js';
 
 export class VerificationSuite {
     /**
@@ -47,8 +48,7 @@ export class VerificationSuite {
     
     async verifyConsolidacionE2E() {
         const tests = [
-            { name: 'Persistencia F5 tras recarga de Store', fn: async () => await fullFlowSuite.testPersistence() },
-            { name: 'Concurrencia atómica multi-pestaña en Store (Web Locks API)', fn: async () => await fullFlowSuite.testConcurrencyLocks() },
+            { name: 'Cola de outbox persistida sobre hermes_kv_store (agregar/recargar/quitar)', fn: async () => await fullFlowSuite.testOutboxFlow() },
             { name: 'Flujo E2E de Contactos modular (Alta/Baja/Consulta)', fn: async () => await fullFlowSuite.testContactsFlow() },
             { name: 'Flujo E2E de Grupos modular (Creación/Edición/Salida)', fn: async () => await fullFlowSuite.testGroupsFlow() },
             { name: 'Sincronización de Imágenes Efímeras en emisor y receptor', fn: async () => await fullFlowSuite.testEphemeralImages() },
@@ -149,7 +149,10 @@ export class VerificationSuite {
 
     async verifyScreenshotShield() {
         const tests = [
-            { name: '10 capas de protección inicializadas', fn: () => Boolean(window.proScreenshotShield) },
+            // screenshot_shield.js (window.screenshotShield) es código muerto -- nunca lo
+            // importa main.js. El módulo real, enganchado en el login (auth_ui.js), es
+            // ScreenshotDetector vía state.screenshotDetector.
+            { name: 'Screenshot Detector activo (state.screenshotDetector)', fn: () => Boolean(state.screenshotDetector) },
             { name: 'Respuesta ante evento de captura', fn: () => true }
         ];
         return this.runTests('Anti-Screenshot', tests);

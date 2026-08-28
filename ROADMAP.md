@@ -25,12 +25,31 @@
 ## 🎯 HermesChat v1.0 — El Producto Funcional (Objetivo Inmediato)
 **Objetivo Principal:** *Construir los flujos funcionales del cliente, UX, manejo extremo de desconexiones y operaciones de ciclo de vida.*
 
-- [ ] **Chat Privado y Grupal Robusto**: Envío confiable, confirmaciones de entrega y recepción (Read Receipts).
-- [ ] **Gestión Avanzada de Grupos**: Incorporación y salida de miembros, rotación de claves en cambios de composición.
-- [ ] **Resiliencia Extrema Offline**: Reintentos automáticos, cola de mensajes pendientes robusta, sincronización sin pérdida tras reconexión (Offline Recovery).
-- [ ] **Experiencia de Usuario (UX)**: Salir de grupo, eliminar conversaciones, buscar mensajes, indicadores de escritura (Typing Indicators).
-- [ ] **Adjuntos Completos**: Soporte unificado de imágenes, documentos y audios efímeros.
-- [ ] **Notificaciones**: Integración con Web Notifications API e indicadores visuales de nueva actividad.
+> **Nota (2026-08-27):** esta lista estaba desactualizada respecto al código real — una
+> pasada de testeo en vivo encontró que buena parte de "UX" ya está construida y funciona.
+> Ver `BACKLOG.md` para el detalle de qué quedó realmente pendiente en grupos.
+
+- [x] **Chat Privado — confirmaciones de entrega y lectura (Read Receipts)**: verificado en
+  vivo tanto en 1:1 como en grupo — un mensaje pasa `pending` → `sent` → `delivered` →
+  `read`. En grupo se agregó agregación `deliveredBy`/`readBy` por miembro (`BACKLOG.md` #10).
+- [x] **Gestión Avanzada de Grupos**: agregar/salir/expulsar miembro funcionan, y la clave
+  simétrica rota automáticamente en los tres casos (agregar, expulsar, salir) — antes era
+  100% manual y desconectado, ahora es automático (`BACKLOG.md` #4 y #9).
+- [ ] **Resiliencia Extrema Offline**: el reintento básico de outbox al reconectar y el
+  polling REST de respaldo ya funcionan (`SyncManager.flushOutbox()`, verificado esta
+  sesión); falta someterlo a los casos límite reales (cierre de navegador a mitad de envío,
+  dos pestañas emitiendo a la vez — ver v1.1 abajo).
+- [x] **Experiencia de Usuario (UX)**: salir de grupo, eliminar conversación, buscar dentro
+  de una conversación (con navegación siguiente/anterior) e indicador de "escribiendo"
+  (con soporte de grupo) — los cuatro verificados en código y/o en vivo, ya existen y
+  funcionan.
+- [ ] **Adjuntos Completos**: imagen y audio (incluso efímeros) ya funcionan; las imágenes
+  efímeras de grupo además ganaron custodia temporal server-side para evitar reenviar la
+  misma imagen N veces (ver `BACKLOG.md`, sección Baja prioridad). Sigue sin existir soporte
+  de archivo/documento genérico (confirmado de nuevo en la pasada de 2026-08-27: solo
+  `accept="image/*"` en el input real).
+- [x] **Notificaciones**: Web Notifications API real ya integrada (`ui/hermes_notifications.js`
+  + disparo desde `sync_manager.js` en mensajes nuevos con la pestaña oculta/inactiva).
 
 ---
 
@@ -57,14 +76,13 @@
 - Reproducible Builds (Infra Docker)
 
 ### Pendiente ⏳
-- Hybrid Ratchet PQC Completo (X3DH: falta guardar la clave privada ML-KEM generada en
-  `generate_prekey_bundle` y reemplazar el encapsulate simulado — ver `BACKLOG.md`)
-- Backend con estado real por usuario (contactos/grupos) para completar la reconciliación
-  post-pérdida-de-datos — UI ya lista, faltan `GET /api/user/state` y `DELETE /api/user/purge`
-- Compilar `rust/hermes_ffi_py` + Postgres/MySQL compartido para `HERMES_ENV=production` real
 - Auditoría Externa Acreditada
 - Firmado de artefactos (Sigstore / Cosign)
 - SLSA Level 3 compliance (Firma de procedencia)
+
+*(X3DH completo, reconciliación post-pérdida-de-datos y `HERMES_ENV=production` con
+`rust/hermes_ffi_py` compilado — los tres ítems que estaban acá — ya están resueltos y
+probados de punta a punta. Ver `BACKLOG.md`, sección "✅ Ya resuelto".)*
 
 Ver **[`BACKLOG.md`](BACKLOG.md)** para el detalle priorizado de todo lo anterior.
 

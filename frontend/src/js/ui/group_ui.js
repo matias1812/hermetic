@@ -1,7 +1,6 @@
 // frontend/src/js/ui/group_ui.js
 import { state, showToast } from '../state.js';
 import { StateRenderer } from './state_renderer.js';
-import { modalManager } from './modal_manager.js';
 
 export function renderGroupSidebar(openGroupChatCb) {
     const container = document.getElementById('groups-list');
@@ -86,6 +85,43 @@ export function renderGroupSidebar(openGroupChatCb) {
     });
 }
 
+export function renderGroupMemberBadges(grp) {
+    const bar = document.getElementById('group-members-bar');
+    if (!bar) return;
+    bar.innerHTML = '';
+    bar.classList.remove('hidden');
+
+    const isCreator = grp.creator_id === state.currentUser;
+    bar.appendChild(document.createTextNode('👥 MIEMBROS: '));
+
+    grp.members.forEach(m => {
+        const isSelf = m === state.currentUser;
+        const roleStar = m === grp.creator_id ? ' ★' : '';
+
+        const badge = document.createElement('span');
+        badge.className = 'inline-flex items-center bg-purple-950/40 border border-purple-500/20 px-2 py-0.5 rounded gap-1 text-[9px] font-mono text-purple-300';
+        badge.textContent = `@${m}${roleStar}`;
+
+        if (isCreator && !isSelf) {
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'text-red-400 hover:text-red-200 ml-1 font-bold text-[8px] font-mono';
+            removeBtn.textContent = '✕';
+            removeBtn.title = `Expulsar a @${m}`;
+            removeBtn.addEventListener('click', () => {
+                if (window.removeGroupMemberFn) window.removeGroupMemberFn(m);
+            });
+            badge.appendChild(removeBtn);
+        }
+
+        bar.appendChild(badge);
+    });
+}
+
+export function generateGroupKeyHex() {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export function openGroupChat(grp, renderGroupSidebarCb, renderContactSidebarCb, renderMessagesCb) {
     ['settings-modal', 'backup-modal'].forEach(id => {
         const m = document.getElementById(id);
@@ -139,9 +175,12 @@ export function openGroupChat(grp, renderGroupSidebarCb, renderContactSidebarCb,
     
     const delContactBtn = document.getElementById("btn-delete-contact");
     if (delContactBtn) delContactBtn.classList.add("hidden");
-    
+
     const blockContactBtn = document.getElementById("btn-block-contact");
     if (blockContactBtn) blockContactBtn.classList.add("hidden");
+
+    const resendInviteBtnGrp = document.getElementById("btn-resend-invite");
+    if (resendInviteBtnGrp) resendInviteBtnGrp.classList.add("hidden");
 
     const verifyBtn = document.getElementById("btn-verify-safety-number");
     if (verifyBtn) verifyBtn.classList.add("hidden");
@@ -159,36 +198,7 @@ export function openGroupChat(grp, renderGroupSidebarCb, renderContactSidebarCb,
     const leaveGroupBtn = document.getElementById("btn-leave-group");
     if (leaveGroupBtn) leaveGroupBtn.classList.remove("hidden");
 
-    const headerDiv = document.createElement('div');
-    headerDiv.className = 'text-center text-[10px] text-purple-400/70 font-mono py-3 border-b border-purple-500/10 flex flex-wrap gap-2 justify-center items-center';
-    headerDiv.textContent = '\uD83D\uDC65 MIEMBROS: ';
-
-    grp.members.forEach(m => {
-        const isSelf = m === state.currentUser;
-        const roleStar = m === grp.creator_id ? ' \u2605' : '';
-
-        const badge = document.createElement('span');
-        badge.className = 'inline-flex items-center bg-purple-950/40 border border-purple-500/20 px-2 py-0.5 rounded gap-1 text-[9px] font-mono text-purple-300';
-        badge.textContent = `@${m}${roleStar}`;
-
-        if (isCreator && !isSelf) {
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'text-red-400 hover:text-red-200 ml-1 font-bold text-[8px] font-mono';
-            removeBtn.textContent = '\u2715';
-            removeBtn.addEventListener('click', () => {
-                if (window.removeGroupMemberFn) window.removeGroupMemberFn(m);
-            });
-            badge.appendChild(removeBtn);
-        }
-
-        headerDiv.appendChild(badge);
-    });
-
-    const chatMessages = document.getElementById('chat-messages');
-    if (chatMessages) {
-        chatMessages.innerHTML = '';
-        chatMessages.appendChild(headerDiv);
-    }
+    renderGroupMemberBadges(grp);
 
     if (state.chats) {
         state.chatMessages = state.chats.getMessages(state.activeGroup);

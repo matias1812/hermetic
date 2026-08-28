@@ -1,9 +1,9 @@
-use pyo3::prelude::*;
-use pyo3::exceptions::{PyValueError, PyRuntimeError, PyPermissionError};
-use hermes_ffi_core::replay::store::ReplayStore;
 use hermes_ffi_core::replay::memory::InMemoryReplayStore;
+use hermes_ffi_core::replay::store::ReplayStore;
 use hermes_replay_sql::SqlReplayStore;
-use sha3::{Sha3_256, Digest};
+use pyo3::exceptions::{PyPermissionError, PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use sha3::{Digest, Sha3_256};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -42,7 +42,9 @@ fn validate_signature(signature_bytes: &[u8]) -> PyResult<()> {
 
 fn validate_domain(domain: &str) -> PyResult<()> {
     if domain.is_empty() || domain.len() > 32 {
-        return Err(PyValueError::new_err("Domain must be between 1 and 32 characters"));
+        return Err(PyValueError::new_err(
+            "Domain must be between 1 and 32 characters",
+        ));
     }
     Ok(())
 }
@@ -63,40 +65,60 @@ impl NativeReplayRegistry {
     }
 
     #[pyo3(signature = (domain, signature_bytes, ttl_seconds))]
-    pub fn claim(&self, py: Python, domain: &str, signature_bytes: &[u8], ttl_seconds: u64) -> PyResult<Vec<u8>> {
+    pub fn claim(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        ttl_seconds: u64,
+    ) -> PyResult<Vec<u8>> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let now = system_now()?;
         let hash = hash_signature(signature_bytes);
         let store = self.store.clone();
-        
+
         // Clone domain string to move into the closure
         let domain_owned = domain.to_string();
-        let token = py.detach(move || {
-            store.claim(&domain_owned, hash, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
-        
+        let token = py
+            .detach(move || store.claim(&domain_owned, hash, now, ttl_seconds))
+            .map_err(map_replay_error)?;
+
         Ok(token.to_vec())
     }
 
     #[cfg(feature = "test-clock")]
     #[pyo3(signature = (domain, signature_bytes, ttl_seconds, now))]
-    pub fn claim_test(&self, py: Python, domain: &str, signature_bytes: &[u8], ttl_seconds: u64, now: u64) -> PyResult<Vec<u8>> {
+    pub fn claim_test(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        ttl_seconds: u64,
+        now: u64,
+    ) -> PyResult<Vec<u8>> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
         let store = self.store.clone();
-        
+
         let domain_owned = domain.to_string();
-        let token = py.detach(move || {
-            store.claim(&domain_owned, hash, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
-        
+        let token = py
+            .detach(move || store.claim(&domain_owned, hash, now, ttl_seconds))
+            .map_err(map_replay_error)?;
+
         Ok(token.to_vec())
     }
 
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds))]
-    pub fn commit(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64) -> PyResult<()> {
+    pub fn commit(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let now = system_now()?;
@@ -109,15 +131,22 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.commit(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.commit(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[cfg(feature = "test-clock")]
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds, now))]
-    pub fn commit_test(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64, now: u64) -> PyResult<()> {
+    pub fn commit_test(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+        now: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
@@ -129,14 +158,20 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.commit(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.commit(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds))]
-    pub fn reject(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64) -> PyResult<()> {
+    pub fn reject(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let now = system_now()?;
@@ -149,15 +184,22 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.reject(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.reject(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[cfg(feature = "test-clock")]
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds, now))]
-    pub fn reject_test(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64, now: u64) -> PyResult<()> {
+    pub fn reject_test(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+        now: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
@@ -169,14 +211,19 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.reject(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.reject(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[pyo3(signature = (domain, signature_bytes, token))]
-    pub fn release(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8]) -> PyResult<()> {
+    pub fn release(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
@@ -188,9 +235,8 @@ impl NativeReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.release(&domain_owned, hash, t)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.release(&domain_owned, hash, t))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 }
@@ -213,43 +259,65 @@ impl SqlReplayRegistry {
     }
 
     pub fn health_check(&self) -> PyResult<()> {
-        self.store.health_check().map_err(|e| PyRuntimeError::new_err(format!("Health check failed: {}", e)))
+        self.store
+            .health_check()
+            .map_err(|e| PyRuntimeError::new_err(format!("Health check failed: {}", e)))
     }
 
     #[pyo3(signature = (domain, signature_bytes, ttl_seconds))]
-    pub fn claim(&self, py: Python, domain: &str, signature_bytes: &[u8], ttl_seconds: u64) -> PyResult<Vec<u8>> {
+    pub fn claim(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        ttl_seconds: u64,
+    ) -> PyResult<Vec<u8>> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let now = system_now()?;
         let hash = hash_signature(signature_bytes);
         let store = self.store.clone();
-        
+
         let domain_owned = domain.to_string();
-        let token = py.detach(move || {
-            store.claim(&domain_owned, hash, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
-        
+        let token = py
+            .detach(move || store.claim(&domain_owned, hash, now, ttl_seconds))
+            .map_err(map_replay_error)?;
+
         Ok(token.to_vec())
     }
 
     #[cfg(feature = "test-clock")]
     #[pyo3(signature = (domain, signature_bytes, ttl_seconds, now))]
-    pub fn claim_test(&self, py: Python, domain: &str, signature_bytes: &[u8], ttl_seconds: u64, now: u64) -> PyResult<Vec<u8>> {
+    pub fn claim_test(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        ttl_seconds: u64,
+        now: u64,
+    ) -> PyResult<Vec<u8>> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
         let store = self.store.clone();
-        
+
         let domain_owned = domain.to_string();
-        let token = py.detach(move || {
-            store.claim(&domain_owned, hash, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
-        
+        let token = py
+            .detach(move || store.claim(&domain_owned, hash, now, ttl_seconds))
+            .map_err(map_replay_error)?;
+
         Ok(token.to_vec())
     }
 
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds))]
-    pub fn commit(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64) -> PyResult<()> {
+    pub fn commit(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let now = system_now()?;
@@ -262,15 +330,22 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.commit(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.commit(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[cfg(feature = "test-clock")]
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds, now))]
-    pub fn commit_test(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64, now: u64) -> PyResult<()> {
+    pub fn commit_test(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+        now: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
@@ -282,14 +357,20 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.commit(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.commit(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds))]
-    pub fn reject(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64) -> PyResult<()> {
+    pub fn reject(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let now = system_now()?;
@@ -302,15 +383,22 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.reject(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.reject(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[cfg(feature = "test-clock")]
     #[pyo3(signature = (domain, signature_bytes, token, ttl_seconds, now))]
-    pub fn reject_test(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8], ttl_seconds: u64, now: u64) -> PyResult<()> {
+    pub fn reject_test(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+        ttl_seconds: u64,
+        now: u64,
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
@@ -322,14 +410,19 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.reject(&domain_owned, hash, t, now, ttl_seconds)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.reject(&domain_owned, hash, t, now, ttl_seconds))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 
     #[pyo3(signature = (domain, signature_bytes, token))]
-    pub fn release(&self, py: Python, domain: &str, signature_bytes: &[u8], token: &[u8]) -> PyResult<()> {
+    pub fn release(
+        &self,
+        py: Python,
+        domain: &str,
+        signature_bytes: &[u8],
+        token: &[u8],
+    ) -> PyResult<()> {
         validate_signature(signature_bytes)?;
         validate_domain(domain)?;
         let hash = hash_signature(signature_bytes);
@@ -341,9 +434,8 @@ impl SqlReplayRegistry {
 
         let store = self.store.clone();
         let domain_owned = domain.to_string();
-        py.detach(move || {
-            store.release(&domain_owned, hash, t)
-        }).map_err(map_replay_error)?;
+        py.detach(move || store.release(&domain_owned, hash, t))
+            .map_err(map_replay_error)?;
         Ok(())
     }
 }

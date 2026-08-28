@@ -249,7 +249,7 @@ export async function cancelSentRequest(targetId) {
     }
 }
 
-export async function acceptContactRequest(senderId) {
+async function sendContactAccept(senderId, successMessage) {
     try {
         const sharedKeyBytes = crypto.getRandomValues(new Uint8Array(32));
         const sharedKeyHex = Array.from(sharedKeyBytes).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -262,12 +262,24 @@ export async function acceptContactRequest(senderId) {
         });
         await state.sync.registerRelationship('contact', senderId);
 
-        showToast(`Contacto @${senderId} aceptado`);
+        showToast(successMessage);
         renderContactSidebar();
     } catch (e) {
         console.error(e);
         showToast("Error al aceptar contacto", true);
     }
+}
+
+export async function acceptContactRequest(senderId) {
+    await sendContactAccept(senderId, `Contacto @${senderId} aceptado`);
+}
+
+export async function resendContactInvite(contactId) {
+    // El otro lado ya nos tiene como contacto aceptado — este mismo mensaje
+    // (contact_accept con un shared_key nuevo) es lo que su cliente necesita
+    // para reconstruir el contacto si perdió sus datos locales (ver el
+    // sistema de reconciliación en recovery/reconciliation_manager.js).
+    await sendContactAccept(contactId, `Invitación reenviada a @${contactId}`);
 }
 
 export async function rejectContactRequestFn(senderId) {
@@ -382,10 +394,15 @@ export function openChatWithContact() {
     document.getElementById("btn-add-group-member").classList.add("hidden");
     document.getElementById("btn-edit-group-config").classList.add("hidden");
     document.getElementById("btn-leave-group")?.classList.add("hidden");
+    document.getElementById("group-members-bar")?.classList.add("hidden");
 
     const deleteBtn = document.getElementById("btn-delete-conversation");
     deleteBtn.classList.remove("hidden");
     deleteBtn.removeAttribute("disabled");
+
+    const resendInviteBtn = document.getElementById("btn-resend-invite");
+    resendInviteBtn.classList.remove("hidden");
+    resendInviteBtn.removeAttribute("disabled");
 
     const deleteContactBtn = document.getElementById("btn-delete-contact");
     deleteContactBtn.classList.remove("hidden");
@@ -516,6 +533,7 @@ export function setupChatEventListeners() {
     const btnDeleteConv = document.getElementById("btn-delete-conversation");
     const btnDeleteContact = document.getElementById("btn-delete-contact");
     const btnBlockContact = document.getElementById("btn-block-contact");
+    const btnResendInvite = document.getElementById("btn-resend-invite");
     const btnEditGroupConfig = document.getElementById("btn-edit-group-config");
     const btnLeaveGroup = document.getElementById("btn-leave-group");
 
@@ -680,18 +698,25 @@ export function setupChatEventListeners() {
                 if (!grp) return;
 
                 await state.groups.addMember(state.storage, state.activeGroup, userId);
-                
-                // Enviar invitación completa al nuevo miembro
+
+                // Rotar la clave del grupo al agregar un miembro: evita reciclar
+                // indefinidamente la misma clave simétrica hacia gente nueva (ver
+                // BACKLOG.md #4). grp.members ya incluye a userId (addMember lo agregó).
+                const newKeyHex = GroupUI.generateGroupKeyHex();
+                await state.groups.rotateGroupKey(state.storage, state.activeGroup, newKeyHex);
+
+                // Enviar invitación completa al nuevo miembro (ya con la clave rotada)
                 await state.sync.sendBlob(state.currentUser, userId, {
                     type: "group_invite",
                     group_id: grp.id,
                     group_name: grp.name,
                     creator_id: grp.creator_id,
                     members: grp.members,
-                    symmetric_key: grp.symmetric_key
+                    symmetric_key: newKeyHex
                 });
 
-                // Notificar a los miembros existentes del nuevo ingreso
+                // Notificar a los miembros existentes del nuevo ingreso y distribuirles
+                // la clave rotada
                 for (const memberId of grp.members) {
                     if (memberId !== state.currentUser && memberId !== userId) {
                         state.sync.sendBlob(state.currentUser, memberId, {
@@ -699,6 +724,11 @@ export function setupChatEventListeners() {
                             group_id: grp.id,
                             user_id: userId
                         }).catch(e => console.error("Error notificando nuevo miembro", e));
+                        state.sync.sendBlob(state.currentUser, memberId, {
+                            type: "group_rekey",
+                            group_id: grp.id,
+                            new_symmetric_key: newKeyHex
+                        }).catch(() => {});
                     }
                 }
 
@@ -788,6 +818,14 @@ export function setupChatEventListeners() {
                 renderMessages();
                 showToast('Historial vaciado');
             }
+        };
+    }
+
+    if (btnResendInvite) {
+        btnResendInvite.onclick = async () => {
+            if (!state.activeContact) return;
+            document.getElementById("chat-options-menu")?.classList.add("hidden");
+            await resendContactInvite(state.activeContact);
         };
     }
 

@@ -18,7 +18,7 @@ jobs:
         env:
           PYTHONPATH: .
         run: |
-          pip install fastapi uvicorn websockets cryptography requests pydantic
+          pip install -r requirements.txt
           nohup uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port 8000 &
           
           # Esperar activamente a que FastAPI levante

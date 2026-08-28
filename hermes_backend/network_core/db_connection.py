@@ -61,7 +61,8 @@ class DatabaseConnection:
                     public_key_sphincs TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     last_relay_at INTEGER NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE
+                    is_active BOOLEAN DEFAULT TRUE,
+                    recovery_proof_hex VARCHAR(64) NULL
                 ) ENGINE=InnoDB
             """)
 
@@ -117,7 +118,8 @@ class DatabaseConnection:
                     public_key_sphincs TEXT NOT NULL,
                     created_at INTEGER NOT NULL,
                     last_relay_at INTEGER NOT NULL,
-                    is_active BOOLEAN DEFAULT TRUE
+                    is_active BOOLEAN DEFAULT TRUE,
+                    recovery_proof_hex TEXT NULL
                 )
             """)
 
@@ -177,39 +179,50 @@ class DatabaseConnection:
     def register_user(self, id_hash: str, public_key_mlkem: str, public_key_sphincs: str):
         # Nota arquitectónica: public_key_sphincs almacena Ed25519 PK (32B) para clientes web WASM
         # y SPHINCS+ PK (32B) para clientes nativos post-cuánticos.
+        #
+        # SEC: registro de una sola escritura -- NUNCA sobreescribir un id_hash ya registrado.
+        # No hay contraseña del lado servidor (la autenticación real es por posesión de la
+        # clave privada vía firma), así que un UPDATE sin chequeo de propiedad le dejaba a
+        # cualquiera que supiera el alias público de otra persona (alias -> id_hash es un
+        # hash público, no un secreto) reemplazar sus claves registradas sin ninguna prueba de
+        # posesión: toma de cuenta completa (la víctima real queda con firma inválida, 401 en
+        # cualquier login futuro) y habilita MITM contra cualquiera que inicie un contacto
+        # nuevo después del ataque (encriptarían contra la clave del atacante). El endpoint
+        # (api.py::register_keys) YA esperaba este 409 en su manejo de excepciones, y
+        # sync_manager.js YA lo maneja explícitamente en dos lugares (fetchPendingBlobs
+        # detiene la sincronización y avisa al usuario) -- este método nunca lo lanzaba, así
+        # que ese camino jamás se ejecutaba. Quien pierde sus llaves locales de verdad se
+        # recupera con su frase BIP-39 real, no re-registrando en silencio.
         existing = self.get_user(id_hash)
+        if existing:
+            raise DatabaseError("User already registered")
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
             now = int(time.time())
             # Redondear marca de tiempo a 5 minutos (300 segundos) para anonimato
             rounded_time = (now // 300) * 300
-            
-            if existing:
-                if self.is_mysql:
-                    cursor.execute("""
-                        UPDATE users SET public_key_mlkem = %s, public_key_sphincs = %s WHERE id_hash = %s
-                    """, (public_key_mlkem, public_key_sphincs, id_hash))
-                else:
-                    cursor.execute("""
-                        UPDATE users SET public_key_mlkem = ?, public_key_sphincs = ? WHERE id_hash = ?
-                    """, (public_key_mlkem, public_key_sphincs, id_hash))
+
+            if self.is_mysql:
+                cursor.execute("""
+                    INSERT INTO users (id_hash, public_key_mlkem, public_key_sphincs, created_at, last_relay_at, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (id_hash, public_key_mlkem, public_key_sphincs, rounded_time, rounded_time, True))
             else:
-                if self.is_mysql:
-                    cursor.execute("""
-                        INSERT INTO users (id_hash, public_key_mlkem, public_key_sphincs, created_at, last_relay_at, is_active)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (id_hash, public_key_mlkem, public_key_sphincs, rounded_time, rounded_time, True))
-                else:
-                    cursor.execute("""
-                        INSERT INTO users (id_hash, public_key_mlkem, public_key_sphincs, created_at, last_relay_at, is_active)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (id_hash, public_key_mlkem, public_key_sphincs, rounded_time, rounded_time, True))
-                
+                cursor.execute("""
+                    INSERT INTO users (id_hash, public_key_mlkem, public_key_sphincs, created_at, last_relay_at, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (id_hash, public_key_mlkem, public_key_sphincs, rounded_time, rounded_time, True))
+
             conn.commit()
             cursor.close()
         except DatabaseError:
             raise
+        except (pymysql.err.IntegrityError, sqlite3.IntegrityError):
+            # Carrera: dos registros concurrentes del mismo id_hash nuevo pasaron ambos
+            # el chequeo `existing` de arriba antes de que cualquiera insertara; la PK
+            # rechaza al segundo. Mismo resultado (409), no un 503 de error de DB real.
+            raise DatabaseError("User already registered")
         except Exception as e:
             logger.error(f"Error registering user: {e}")
             raise DatabaseError("Register user operation failed")
@@ -238,6 +251,48 @@ class DatabaseConnection:
         except Exception as e:
             logger.error(f"Error querying user: {e}")
             raise DatabaseError("Query user operation failed")
+        finally:
+            conn.close()
+
+    def set_recovery_proof(self, id_hash: str, proof_hex: str) -> bool:
+        """
+        Guarda el "proof" de recuperación (derivado de la frase mnemónica vía
+        HKDF con info distinto al de la clave de cifrado del backup — ver
+        core_api.rs derive_recovery_proof). El servidor solo puede comparar
+        este valor byte a byte; no puede derivar la frase ni la clave de
+        cifrado del backup a partir de él.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if self.is_mysql:
+                cursor.execute("UPDATE users SET recovery_proof_hex = %s WHERE id_hash = %s", (proof_hex, id_hash))
+            else:
+                cursor.execute("UPDATE users SET recovery_proof_hex = ? WHERE id_hash = ?", (proof_hex, id_hash))
+            conn.commit()
+            updated = cursor.rowcount > 0
+            cursor.close()
+            return updated
+        except Exception as e:
+            logger.error(f"Error setting recovery proof: {e}")
+            raise DatabaseError("Set recovery proof operation failed")
+        finally:
+            conn.close()
+
+    def get_recovery_proof(self, id_hash: str) -> Optional[str]:
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            if self.is_mysql:
+                cursor.execute("SELECT recovery_proof_hex FROM users WHERE id_hash = %s", (id_hash,))
+            else:
+                cursor.execute("SELECT recovery_proof_hex FROM users WHERE id_hash = ?", (id_hash,))
+            row = cursor.fetchone()
+            cursor.close()
+            return row[0] if row else None
+        except Exception as e:
+            logger.error(f"Error querying recovery proof: {e}")
+            raise DatabaseError("Query recovery proof operation failed")
         finally:
             conn.close()
 

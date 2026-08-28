@@ -2,6 +2,7 @@
 import { state, showToast } from '../state.js';
 import { AudioRecorder } from '../audio_recorder.js';
 import { modalManager } from './modal_manager.js';
+import { ephemeralStore } from '../ephemeral_store.js';
 
 export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSidebarCb) {
     let viewOnceEnabled = false;
@@ -125,17 +126,17 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                         raw:           { signature: envelopeRes.signature, timestamp },
                     };
 
-                    await state.chats.addMessage(state.storage, targetId, msgObj);
-
-                    if (state.mediaStorage) {
-                        await state.mediaStorage.saveAudio({
-                            id:        msgObj.id,
-                            base64Data: base64,
-                            duration:  durationSec,
-                            mimeType:  mimeType,
-                            sender:    state.currentUser,
-                            chatId:    targetId,
-                        });
+                    if (viewOnceEnabled) {
+                        // Nunca tocar disco con el propio audio efímero enviado. Antes
+                        // esto además guardaba una segunda copia cruda sin cifrar en
+                        // MediaStorage (mismo bug para audio NO efímero, ver abajo) —
+                        // ahora directamente no se persiste nada.
+                        ephemeralStore.add(targetId, msgObj);
+                    } else {
+                        // El audio ya viaja embebido en base64 dentro del mensaje
+                        // persistido — la copia separada en MediaStorage era pura
+                        // redundancia (nunca se borraba, quedaba para siempre).
+                        await state.chats.addMessage(state.storage, targetId, msgObj);
                     }
 
                     state.chatMessages = state.chats.getMessages(targetId);
@@ -230,10 +231,13 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
             const idx = state.chatMessages.findIndex(m => m.id === tempId);
             if (idx !== -1) state.chatMessages.splice(idx, 1);
 
-            await state.chats.addMessage(state.storage, targetId, {
-                ...optimisticMsg,
-                id: envelopeRes.signature
-            });
+            const confirmedMsg = { ...optimisticMsg, id: envelopeRes.signature };
+            if (isEphemeral) {
+                // Nunca tocar disco con el propio texto efímero enviado.
+                ephemeralStore.add(targetId, confirmedMsg);
+            } else {
+                await state.chats.addMessage(state.storage, targetId, confirmedMsg);
+            }
 
             state.chatMessages = state.chats.getMessages(targetId);
             if (renderMessagesCb) renderMessagesCb();
@@ -388,18 +392,33 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                 if (btnSendPhoto) btnSendPhoto.disabled = true;
                 
                 try {
-                    const payload = state.activeGroup ? {
-                        type: isEphemeral ? "group_ephemeral_image" : "group_chat",
-                        group_id: state.activeGroup,
-                        text: base64Data
-                    } : {
-                        type: isEphemeral ? "ephemeral_image" : "chat",
-                        text: base64Data
-                    };
+                    let envelopeRes;
+                    if (state.activeGroup && isEphemeral) {
+                        // Custodia temporal en servidor (ver BACKLOG.md): se sube la imagen una
+                        // sola vez en vez de embeberla N veces (una por miembro) en el payload
+                        // E2E, y solo se manda un puntero por el canal cifrado existente.
+                        const grp = state.groups.userGroups.find(g => g.id === state.activeGroup);
+                        const memberIds = grp ? grp.members.filter(m => m !== state.currentUser) : [];
+                        const imageId = await state.sync.uploadGroupEphemeralImage(state.activeGroup, memberIds, base64Data);
+                        envelopeRes = await state.sync.sendGroupBlob(state.currentUser, state.activeGroup, {
+                            type: "group_ephemeral_image_ptr",
+                            group_id: state.activeGroup,
+                            image_id: imageId
+                        });
+                    } else {
+                        const payload = state.activeGroup ? {
+                            type: "group_chat",
+                            group_id: state.activeGroup,
+                            text: base64Data
+                        } : {
+                            type: isEphemeral ? "ephemeral_image" : "chat",
+                            text: base64Data
+                        };
 
-                    const envelopeRes = state.activeGroup
-                        ? await state.sync.sendGroupBlob(state.currentUser, targetId, payload)
-                        : await state.sync.sendBlob(state.currentUser, targetId, payload);
+                        envelopeRes = state.activeGroup
+                            ? await state.sync.sendGroupBlob(state.currentUser, targetId, payload)
+                            : await state.sync.sendBlob(state.currentUser, targetId, payload);
+                    }
                     const timestamp = Math.floor(Date.now() / 1000);
                     const timeStr = new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                     
@@ -416,7 +435,12 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                         raw: { signature: envelopeRes.signature, timestamp: timestamp }
                     };
 
-                    await state.chats.addMessage(state.storage, targetId, msgObj);
+                    if (isEphemeral) {
+                        // Nunca tocar disco con la propia imagen efímera enviada.
+                        ephemeralStore.add(targetId, msgObj);
+                    } else {
+                        await state.chats.addMessage(state.storage, targetId, msgObj);
+                    }
                     state.chatMessages = state.chats.getMessages(targetId);
                     if (renderMessagesCb) renderMessagesCb();
                     if (renderContactSidebarCb) renderContactSidebarCb();

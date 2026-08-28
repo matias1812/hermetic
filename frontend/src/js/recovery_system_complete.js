@@ -13,7 +13,7 @@ function hexToBytes(hex) {
     return new Uint8Array((hex || '').match(/.{1,2}/g)?.map(b => parseInt(b, 16)) || []);
 }
 function getSessionAuthHeaders() {
-    const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+    const token = sessionStorage.getItem('hermes_session_token');
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
     return headers;
@@ -24,71 +24,80 @@ export class CompleteRecoverySystem {
      * Sistema de recuperación por frase mnemónica (12 palabras).
      *
      * INTEGRA:
-     * - RecoveryKeyDerivation (PBKDF2 600K)
+     * - RecoveryKeyDerivation (HKDF-SHA256 vía WASM, namespaced por user_id_hash)
      * - StateVersionControl (Vector Clock)
      * - ConflictResolver (Last-Write-Wins + Merge)
      * - StateCompressor (GZIP)
      * - AutoBackupSystem (cada 5 min + en cambios)
      *
-     * LIMITACIÓN CONOCIDA (2026-08-27): uploadBlob()/downloadBlob() pegan contra
-     * /api/recovery_blob y GET /api/backup/{id}, ninguno de los dos existe en el
-     * backend — ambos tienen try/catch que degradan a un fallback local
-     * (localStorage) sin avisar al usuario que la sincronización con la nube no
-     * ocurrió. Por ahora esta recuperación es LOCAL-ONLY: sirve para restaurar en
-     * el mismo dispositivo (o desde un blob que el usuario exportó a mano), no para
-     * sincronizar entre dispositivos vía servidor. Si se necesita eso, la ruta más
-     * corta es redirigir uploadBlob/downloadBlob a /api/backup y /api/backup/fetch
-     * (esos sí existen, están probados) en vez de inventar un endpoint nuevo.
+     * Zero-knowledge: el servidor solo guarda el "proof" derivado (HKDF, info
+     * label distinto de la clave de cifrado) y el blob ya cifrado — nunca la
+     * mnemónica ni la clave que descifra el backup. Eso es lo que permite
+     * /api/recovery/fetch autenticar una recuperación SIN sesión previa (caso
+     * "perdí el dispositivo"), ver restorePreAuth().
      */
-    
+
     constructor() {
         this.derivation = RecoveryKeyDerivation;
         this.versionControl = new StateVersionControl();
         this.conflictResolver = new ConflictResolver(this.versionControl);
         this.compressor = StateCompressor;
-        this.recoveryKey = null;
+        this.mnemonic = null;
+        this.userIdHash = null;
+        this.recoveryKey = null; // flag: true una vez que hay mnemonic+userIdHash listos para autoBackup
         this.autoBackupInterval = null;
     }
-    
+
     /**
-     * Inicializar al registrar (generar Recovery Key).
+     * Inicializar al registrar (generar la frase y registrar su proof en el
+     * servidor). Lanza si el registro del proof falla — sin eso, la frase
+     * mostrada al usuario nunca podría usarse para recuperar la cuenta, así
+     * que no es aceptable degradar en silencio (ver auth_ui.js, que bloquea
+     * el registro si esto lanza).
      */
     async initialize(userIdHash) {
         // 1. Generar frase mnemotécnica
         const mnemonic = await this.derivation.generateMnemonic();
-        
-        // 2. Derivar clave
-        const { key, verification } = await this.derivation.deriveKeyFromMnemonic(
-            mnemonic, 
-            userIdHash
-        );
-        
-        this.recoveryKey = key;
-        
+
+        // 2. Crear marcador de verificación local (namespaced por usuario)
+        await this.derivation.createVerificationMarker(mnemonic, userIdHash);
+
         // 3. Mostrar frase al usuario
         await this.showRecoveryPhrase(mnemonic);
-        
-        // Save verification payload so verifyMnemonic works later
-        localStorage.setItem('hermes_recovery_verification', JSON.stringify(verification));
-        
-        // 4. Iniciar auto-backup
+
+        // 4. Registrar el proof en el servidor — sin esto /api/recovery/fetch
+        // nunca podrá autenticar una recuperación futura con esta frase.
+        const proofHex = await this.derivation.deriveProof(mnemonic, userIdHash);
+        await this.registerRecoveryProof(userIdHash, proofHex);
+
+        this.mnemonic = mnemonic;
+        this.userIdHash = userIdHash;
+        this.recoveryKey = true;
+
+        // 5. Iniciar auto-backup
         this.startAutoBackup();
-        
-        return { mnemonic, verification };
+
+        return { mnemonic };
+    }
+
+    async registerRecoveryProof(userIdHash, proofHex) {
+        const res = await fetch('/api/recovery/register-proof', {
+            method: 'POST',
+            headers: getSessionAuthHeaders(),
+            body: JSON.stringify({ user_hash: userIdHash, proof_hex: proofHex })
+        });
+        if (!res.ok) {
+            throw new Error('El servidor rechazó el registro de recuperación (status ' + res.status + ')');
+        }
     }
     
     async showRecoveryPhrase(mnemonic) {
-        console.log("====== RECOVERY PHRASE ======");
-        console.log(mnemonic);
-        console.log("=============================");
-        if (window.modalManager) {
-            return window.modalManager.custom({
-                title: '[ ⚠️ GUARDA ESTA FRASE DE RECUPERACIÓN ]',
-                body: `<p>Anota estas 12 palabras en orden. Es la ÚNICA forma de recuperar tu cuenta.</p>
-                       <div class="bg-gray-900 p-4 rounded text-terminal text-center my-4 select-all text-xl">${mnemonic}</div>`,
-                footer: `<button class="btn-cyber w-full" onclick="modalManager.close()">YA LA GUARDÉ</button>`,
-                size: 'large'
-            });
+        if (!window.modalManager) {
+            throw new Error('No se pudo mostrar el modal de la frase de recuperación (modalManager no disponible)');
+        }
+        const confirmed = await window.modalManager.mandatoryRecoveryPhrase(mnemonic);
+        if (!confirmed) {
+            throw new Error('Confirmación de la frase de recuperación cancelada');
         }
     }
     
@@ -98,6 +107,7 @@ export class CompleteRecoverySystem {
             groups: await state.storage.load('hermes_groups') || {},
             groupKeys: await state.storage.load('hermes_shared_keys') || {},
             settings: await state.storage.load('hermes_settings') || {},
+            keys: await state.storage.load('hermes_keys') || null,
             vectorClock: this.versionControl.vectorClock,
             deviceId: this.versionControl.deviceId
         };
@@ -108,47 +118,96 @@ export class CompleteRecoverySystem {
         await state.storage.save('hermes_groups', newState.groups);
         await state.storage.save('hermes_shared_keys', newState.groupKeys);
         if (newState.settings) await state.storage.save('hermes_settings', newState.settings);
+        if (newState.keys) await state.storage.save('hermes_keys', newState.keys);
         this.versionControl.vectorClock = newState.vectorClock;
     }
-    
+
     /**
-     * Restaurar desde Recovery Key.
+     * Restaurar desde Recovery Key con sesión YA activa (importar un backup
+     * más nuevo/de otro dispositivo mientras la cuenta sigue logueada acá).
+     * Para el caso "perdí el dispositivo y no tengo sesión", ver restorePreAuth().
      */
     async restore(mnemonic, userIdHash) {
-        // 1. Verificar frase
-        const isValid = await this.derivation.verifyMnemonic(mnemonic, userIdHash);
+        const normalized = (mnemonic || '').toLowerCase().trim().replace(/\s+/g, ' ');
+
+        // 1. Verificar frase contra el marcador local
+        const isValid = await this.derivation.verifyMnemonic(normalized, userIdHash);
         if (!isValid) {
             throw new Error('Frase de recuperación incorrecta');
         }
-        
-        // 2. Derivar clave
-        const { key } = await this.derivation.deriveKeyFromMnemonic(mnemonic, userIdHash);
-        this.recoveryKey = key;
-        
-        // 3. Descargar blob cifrado del servidor
-        const blobId = localStorage.getItem('hermes_recovery_blob_id');
-        if (!blobId) throw new Error('No backup ID found locally');
-        const blob = await this.downloadBlob(blobId);
-        
-        // 4. Descifrar
-        const plaintext = await hermesBridge.decryptWithRecoveryKey(mnemonic, blob.ciphertext);
-        
-        // 5. Descomprimir
+
+        this.mnemonic = normalized;
+        this.userIdHash = userIdHash;
+        this.recoveryKey = true;
+
+        // 2. Descargar el backup más reciente (sesión activa → /api/backup/fetch)
+        const blob = await this.downloadBlob('latest');
+
+        // 3. Descifrar
+        const plaintext = await hermesBridge.decryptWithRecoveryKey(
+            normalized, userIdHash, new Uint8Array(blob.ciphertext)
+        );
+
+        // 4. Descomprimir
         const remoteState = await this.compressor.decompressState(
             new Uint8Array(plaintext)
         );
-        
-        // 6. Resolver conflictos (si los hay)
+
+        // 5. Resolver conflictos (si los hay)
         const localState = await this.getCurrentState();
         const resolved = await this.conflictResolver.resolve(localState, remoteState);
-        
-        // 7. Restaurar
+
+        // 6. Restaurar
         await this.applyState(resolved.state);
-        
-        // 8. Iniciar auto-backup
+
+        // 7. Iniciar auto-backup
         this.startAutoBackup();
-        
+
         return resolved;
+    }
+
+    /**
+     * Restaurar SIN sesión previa ("perdí el dispositivo"): autentica ante
+     * /api/recovery/fetch con el proof derivado de las 12 palabras (el
+     * servidor nunca ve la mnemónica). Devuelve el estado descifrado en vez
+     * de aplicarlo directamente — quien llama (auth_ui.js) todavía tiene que
+     * crear una vault local nueva (setUserId + unlock con una contraseña
+     * nueva) antes de poder guardar nada en state.storage.
+     */
+    async restorePreAuth(mnemonic, userIdHash) {
+        const normalized = (mnemonic || '').toLowerCase().trim().replace(/\s+/g, ' ');
+        if (normalized.split(' ').length < 12) {
+            throw new Error('Se requieren las 12 palabras completas');
+        }
+
+        const proofHex = await this.derivation.deriveProof(normalized, userIdHash);
+
+        const res = await fetch('/api/recovery/fetch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id_hash: userIdHash, proof_hex: proofHex })
+        });
+        if (!res.ok) {
+            if (res.status === 401) throw new Error('Frase de recuperación incorrecta');
+            if (res.status === 429) throw new Error('Demasiados intentos, espera unos minutos');
+            throw new Error('No se pudo contactar al servidor de recuperación');
+        }
+
+        const { backups } = await res.json();
+        if (!backups || backups.length === 0) {
+            throw new Error('Esta cuenta no tiene respaldos de recuperación guardados');
+        }
+        const latest = backups[backups.length - 1];
+        const ciphertext = hexToBytes(latest.encrypted_data);
+
+        const plaintext = await hermesBridge.decryptWithRecoveryKey(normalized, userIdHash, ciphertext);
+        const remoteState = await this.compressor.decompressState(new Uint8Array(plaintext));
+
+        this.mnemonic = normalized;
+        this.userIdHash = userIdHash;
+        this.recoveryKey = true;
+
+        return remoteState;
     }
     
     /**
@@ -156,24 +215,24 @@ export class CompleteRecoverySystem {
      */
     async autoBackup() {
         try {
-            if (!this.recoveryKey) {
+            if (!this.mnemonic || !this.userIdHash) {
                 return null;
             }
             // 1. Obtener estado actual
             const current = await this.getCurrentState();
 
-            
+
             // 2. Incrementar vector clock
             current.vectorClock = this.versionControl.incrementClock();
             current.timestamp = Date.now();
             current.deviceId = this.versionControl.deviceId;
-            
+
             // 3. Comprimir
             const compressed = await this.compressor.compressState(current);
-            
+
             // 4. Cifrar
-            const ciphertext = await hermesBridge.encryptWithRecoveryKey(this.recoveryKey, compressed);
-            
+            const ciphertext = await hermesBridge.encryptWithRecoveryKey(this.mnemonic, this.userIdHash, compressed);
+
             // 5. Subir al servidor
             const blobId = await this.uploadBlob({
                 iv: null,

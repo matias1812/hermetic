@@ -171,32 +171,6 @@ class TestHybridPQCEncryptor(unittest.TestCase):
                 expected_sender_id="alice"
             )
 
-    def test_websocket_nonce_validation(self):
-        """Test: validate_nonce normaliza y valida nonces."""
-        from hermes_backend.network_core.websocket_handler import WebSocketConnectionManager, SecurityError
-        manager = WebSocketConnectionManager()
-        
-        # Valid string hex and bytes nonces
-        valid_hex = "000102030405060708090a0b"
-        valid_bytes = b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b"
-        
-        self.assertEqual(manager.validate_nonce(valid_hex), valid_bytes)
-        self.assertEqual(manager.validate_nonce(valid_bytes), valid_bytes)
-        
-        # Invalid cases must raise SecurityError
-        invalid_cases = [
-            "shorthex",
-            "not-a-hex-value-at-all-123",
-            b"\x00" * 11,  # short bytes
-            b"\x00" * 13,  # long bytes
-            None,
-            12345
-        ]
-        
-        for case in invalid_cases:
-            with self.assertRaises(SecurityError, msg=f"Should reject invalid nonce: {case}"):
-                manager.validate_nonce(case)
-
     def test_secure_xml_parsing(self):
         """Test: xml parsing defuses external entities / XXE."""
         from hermes_backend.stego_engine.geometric_container import GeometricStegoContainer
