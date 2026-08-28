@@ -24,5 +24,5 @@ fuzz_target!(|data: &[u8]| {
     
     // Ignore result of session init (it will fail, but we just want to stress the parser)
     // There is no SessionInitOptions in the root anymore, we will just fuzz decrypt_message.
-    let _ = core.decrypt_message("dummy_session".to_string(), data.to_vec()); // Fuzz with random payload
+    let _ = core.decrypt_message("dummy_session", data); // Fuzz with random payload
 });

@@ -17,16 +17,27 @@ jobs:
       - name: Start FastAPI Backend
         env:
           PYTHONPATH: .
+          # SEC-01/SEC-02 (api.py): el backend aborta el arranque (fail-closed) sin estos
+          # dos. Sin ellos, "nohup uvicorn ... &" crasheaba en silencio -- el step seguia
+          # en verde porque nada chequeaba el exit code del proceso en background, y ZAP
+          # recien se enteraba mas tarde via "Connection refused". Nunca escaneo un backend
+          # real hasta que se agregaron estas dos variables.
+          SESSION_SECRET: "zap-ci-ephemeral-session-secret-not-for-prod-32chars"
+          ALLOWED_ORIGINS: "http://localhost:8000"
         run: |
           pip install -r requirements.txt
-          nohup uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port 8000 &
-          
-          # Esperar activamente a que FastAPI levante
+          nohup uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &
+
+          # Esperar activamente a que FastAPI levante -- y fallar el step explicitamente
+          # si nunca contesta, en vez de dejar que ZAP sea el unico que se entera.
           for i in {1..30}; do
-              curl -s http://127.0.0.1:8000/docs > /dev/null && break
+              curl -s http://127.0.0.1:8000/docs > /dev/null && exit 0
               sleep 1
           done
-          
+          echo "::error::FastAPI backend never became reachable on :8000. Log:"
+          cat backend.log
+          exit 1
+
       - name: ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.12.0
         with:

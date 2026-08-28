@@ -73,7 +73,8 @@ impl DHRatchet {
         let mut hk_bob = [0u8; HEADER_KEY_SIZE];
 
         hkdf.expand(b"hermetic_rk", &mut root_key).unwrap();
-        hkdf.expand(b"hermetic_ck_alice", &mut chain_key_alice).unwrap();
+        hkdf.expand(b"hermetic_ck_alice", &mut chain_key_alice)
+            .unwrap();
         hkdf.expand(b"hermetic_ck_bob", &mut chain_key_bob).unwrap();
         hkdf.expand(b"hermetic_hk_alice", &mut hk_alice).unwrap();
         hkdf.expand(b"hermetic_hk_bob", &mut hk_bob).unwrap();
