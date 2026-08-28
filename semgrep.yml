@@ -36,6 +36,15 @@ rules:
           $VAR = $SECRET
           ...
           del $VAR
+      # safe_zeroize() (hermes_backend/crypto_core/zeroize.py) es la limpieza real que
+      # usa este codebase -- sobrescribe la memoria del bytearray/memoryview en vez de
+      # solo soltar la referencia como hace `del`. Sin esta linea, cada sitio que ya
+      # limpia correctamente via safe_zeroize() en un `finally` (ver hybrid_encryptor.py,
+      # native_core.py) disparaba un falso positivo.
+      - pattern-not-inside: |
+          $VAR = $SECRET
+          ...
+          safe_zeroize($VAR)
     message: "Sensitive variable not explicitly deleted from memory. Consider zeroizing or using `del`."
     severity: INFO
     languages:

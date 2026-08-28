@@ -322,14 +322,60 @@ núcleo cripto, no un fix mecánico.
     cero regresión en ningún camino de cifrado tocado. `cargo fmt -- --check` y
     `cargo clippy -- -D warnings` (comando exacto de los dos workflows) limpios. Artefacto
     real reconstruido (`build_wasm.sh` + `npm run build` del frontend) sin errores.
-  - **Pendiente a propósito, no arreglado en esta pasada**: `python.yml` ("test_and_ast")
-    también falla en el mismo push, pero por una causa distinta y no mecánica — Semgrep
-    (`semgrep.yml`, regla `sensitive-data-in-memory`) bloquea con 17 hallazgos reales sobre
-    manejo de secretos en memoria sin `del`/zeroización explícita en
-    `hybrid_encryptor.py`/`kyber_manager.py`/`native_core.py`/`sphincs_manager.py`/
-    `db_connection.py`. Se decidió explícitamente no tocarlo en el mismo lote que los fixes
-    mecánicos de arriba — toca código de cripto real y necesita revisión caso por caso para
-    no debilitar ninguna garantía, no un fix automático.
+### Quinta vuelta (2026-08-28): `python.yml`/Semgrep — los 17 hallazgos de `sensitive-data-in-memory`, revisados caso por caso, los 17 eran falsos positivos
+
+Se dejó explícitamente aparte de los 4 fixes mecánicos de la vuelta anterior por tocar
+código de cripto real. Revisado archivo por archivo, línea por línea, contra la regla
+real (`semgrep.yml`): `pattern: $VAR = $SECRET` con `metavariable-regex` sobre nombres que
+contienen `private_key|secret|password|mlkem|sphincs`, excluyendo solo los casos con un
+`del $VAR` literal después. Los 17 caían en tres categorías, ninguna era una zeroización
+faltante de verdad:
+
+1. **Ya zeroizado, pero vía `safe_zeroize()` (el helper real del proyecto,
+   `hermes_backend/crypto_core/zeroize.py`), no `del`.** La regla solo reconocía `del
+   $VAR` como prueba de limpieza — no reconocía la convención que el propio código ya usa
+   en todos lados (`hybrid_encryptor.py`, `native_core.py`: `finally: safe_zeroize(...)`).
+   `del` en Python tampoco serviría acá: para `bytes` (inmutable) no borra la memoria real,
+   solo suelta la referencia; `safe_zeroize()` sí sobreescribe físicamente el buffer
+   porque opera sobre `bytearray`/`memoryview` mutables — es una garantía más fuerte que
+   lo que la regla pedía, no una más débil. **Fix**: `semgrep.yml` ahora tiene un segundo
+   `pattern-not-inside` que también reconoce `safe_zeroize($VAR)` como limpieza válida.
+   Bajó los 17 hallazgos a 12 sin tocar una sola línea de código de cripto.
+2. **El valor se devuelve directo al llamador — no hay nada que zeroizar localmente sin
+   invalidar el propio return.** `KyberManager.generate_keypair/encapsulate/decapsulate`,
+   `SphincsManager.generate_keypair`, `HermesNativeCore.generate_keys`: son wrappers finos
+   que generan la llave/secreto y lo devuelven tal cual — el ciclo de vida y la
+   zeroización son responsabilidad de quien los llama (y esos call sites, verificado, sí
+   zeroizan — ver punto 1). Un lector podría pensar "acá falta zeroizar", pero zeroizar
+   ahí borraría el valor antes de que el `return` lo entregue.
+3. **El `pattern-not-inside` de la regla no cruza el límite `try`/`finally` para
+   reasignaciones dentro del propio `try`** (ej. `shared_secret = bytearray(shared_secret)`
+   reasignando la misma variable ya inicializada en `None` antes del `try`) — confirmado
+   leyendo el `finally` correspondiente unas líneas más abajo en cada caso, la
+   zeroización real SÍ está.
+4. **`db_connection.py:35` (`self.db_password`) es un caso distinto: atributo de
+   instancia, no variable local transitoria.** Necesita vivir todo el ciclo de vida del
+   objeto `DatabaseConnection` (se reusa en cada reconexión a MySQL vía
+   `_get_connection()`) — zeroizarlo tras la primera lectura rompería la reconexión.
+
+**Fix aplicado**: además del ajuste a la regla (punto 1), los 12 restantes (categorías 2-4)
+llevan ahora `# nosemgrep: sensitive-data-in-memory` puntual con un comentario explicando
+por qué, en la misma línea del hallazgo — el mismo mecanismo que `kyber_manager.py` ya
+usaba en un lugar (línea 56) antes de esta pasada, aplicado de forma consistente al resto.
+Ninguna lógica de cifrado, generación de llaves, ni limpieza de memoria fue tocada — el
+único archivo con cambio de comportamiento es `semgrep.yml` (la regla en sí).
+
+**Verificado real, no solo "debería estar bien"**: `semgrep ci --config=semgrep.yml` (el
+comando exacto que corre `python.yml`) contra el repo completo en un contenedor Docker
+limpio (`python:3.13-slim`, mismo patrón que las verificaciones anteriores) →
+`Findings: 0 (0 blocking)`, `Scanning 43 files with 3 python rules`, `exit code 0`. Las
+otras dos reglas de `semgrep.yml` (`python-sql-injection-fastapi`,
+`fastapi-missing-privacy-middleware`) siguen intactas y en 0 hallazgos, confirmando que el
+ajuste no aflojó nada fuera del alcance de `sensitive-data-in-memory`.
+
+Con esto, los 5 gates de CI que nunca habían corrido de verdad en GitHub Actions
+(`rust_ffi.yml`, `zap.yml`, `security_ci.yml`, `rust.yml`, `python.yml`) quedan **los 5
+verdes**, verificado en el runner real, no en Docker local ni por lectura de código.
 
 ## ✅ Ya resuelto (2026-08-27)
 

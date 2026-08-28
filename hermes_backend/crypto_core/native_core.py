@@ -131,10 +131,13 @@ class HermesNativeCore:
         """
         Generates real Kyber-1024 and SPHINCS+ keypairs.
         """
+        # Las llaves privadas de esta funcion se devuelven en hex directo en el dict de
+        # retorno (es un endpoint de generacion de llaves) -- no hay nada que zeroizar
+        # localmente sin invalidar el propio valor que la funcion tiene que devolver.
         if NATIVE_AVAILABLE:
             # Delegate Kyber to Rust, generating a safe Handle
             ffi_keys = hermes_ffi.generate_keys_native(session_id)
-            sphincs_pk, sphincs_sk = SphincsManager.generate_keypair()
+            sphincs_pk, sphincs_sk = SphincsManager.generate_keypair()  # nosemgrep: sensitive-data-in-memory
             return {
                 "kyber_pk_hex": ffi_keys["kyber_pk_hex"],
                 "key_handle": ffi_keys["key_handle"],
@@ -143,8 +146,8 @@ class HermesNativeCore:
             }
         else:
             kyber_pk, kyber_sk = KyberManager.generate_keypair()
-            sphincs_pk, sphincs_sk = SphincsManager.generate_keypair()
-            
+            sphincs_pk, sphincs_sk = SphincsManager.generate_keypair()  # nosemgrep: sensitive-data-in-memory
+
             return {
                 "kyber_pk_hex": kyber_pk.hex(),
                 "kyber_sk_hex": kyber_sk.hex(),
@@ -365,7 +368,9 @@ class HermesNativeCore:
         ciphertext_kem_bytes = None
 
         try:
-            sender_sphincs_pk = bytearray(bytes.fromhex(sender_sphincs_pk_hex))
+            # zeroizado en el finally() de esta funcion via safe_zeroize (mismo caso
+            # que encrypt_envelope, arriba)
+            sender_sphincs_pk = bytearray(bytes.fromhex(sender_sphincs_pk_hex))  # nosemgrep: sensitive-data-in-memory
             session_key = bytearray(bytes.fromhex(session_key_hex))
 
             sender_id = package.get('sender_id', '')
@@ -468,7 +473,8 @@ class HermesNativeCore:
                     else:
                         receiver_kyber_sk = bytearray(bytes.fromhex(receiver_kyber_sk_hex))
                         try:
-                            shared_secret = bytearray(KyberManager.decapsulate(bytes(ciphertext_kem_bytes), bytes(receiver_kyber_sk)))
+                            # zeroizado un poco mas abajo via safe_zeroize (finally anidado)
+                            shared_secret = bytearray(KyberManager.decapsulate(bytes(ciphertext_kem_bytes), bytes(receiver_kyber_sk)))  # nosemgrep: sensitive-data-in-memory
                             aes_key = bytearray(KyberManager.derive_aes_key(shared_secret))
                             plaintext = AEADCipher.decrypt(bytes(encrypted_message), bytes(aes_key), aes_nonce_bytes, aad)
                         except (ValueError, TypeError) as e:
