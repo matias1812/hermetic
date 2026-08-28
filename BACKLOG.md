@@ -256,6 +256,81 @@ contra el servidor y el navegador reales, no por lectura de código.
     ataque real es la cripto de cada envelope 1:1 individual, ya cubierta por el resto de
     esta auditoría.
 
+### Cuarta vuelta (2026-08-28): `rust_ffi.yml` corrido en GitHub Actions real → 5 gates de CI que nunca habían corrido de verdad
+
+Tras mergear el fix de `/api/register` a `main` vía PR real (no local), `rust_ffi.yml`
+corrió por primera vez en el runner real de GitHub Actions — los 3 jobs pasaron limpio
+(`test_ffi_core`, `build_ffi_py`, `test_replay_sql`). Pero el mismo push disparó TODOS los
+demás workflows del repo, revelando 5 gates que **nunca habían corrido de verdad** hasta
+ahora (todo lo validado antes de esto fue por lectura de código o por Docker local
+equivalente, nunca el runner real con las versiones exactas de toolchain/lints que usa).
+Los 4 de bajo riesgo se arreglaron y verificaron en el acto; el quinto (Semgrep,
+`python.yml`) se deja pendiente a propósito porque toca juicio real de seguridad sobre el
+núcleo cripto, no un fix mecánico.
+
+- **`zap.yml` — el backend nunca llegó a levantar, en NINGÚN run histórico.** El step
+  "Start FastAPI Backend" hace `nohup uvicorn ... &` y sondea `curl .../docs` por 30s, pero
+  el `env:` del step solo seteaba `PYTHONPATH` — sin `SESSION_SECRET`/`ALLOWED_ORIGINS`,
+  `api.py` aborta el arranque en el primer import (`RuntimeError: CRITICAL SEC-01/SEC-02`,
+  el propio fail-closed del proyecto funcionando exactamente como está diseñado). El loop
+  de sondeo no fallaba el step aunque los 30 intentos fallaran, así que quedaba en verde
+  falso — recién ZAP, un step después, se topaba con "Connection refused" y ahí sí fallaba
+  el job. Es decir: el DAST scan semanal contra el backend real **nunca escaneó nada** desde
+  que estos checks fail-closed se agregaron. **Fix**: agregado `SESSION_SECRET`/
+  `ALLOWED_ORIGINS` al step, y el loop ahora hace `exit 1` explícito (con el log del
+  backend) si nunca contesta, en vez de seguir en silencio.
+- **`security_ci.yml` ("Crypto Core Audit & Test") y `rust.yml` ("test_and_lint") — mismo
+  `cargo fmt --check` real, mismo archivo, nunca pasaba.** `hermes_crypto_wasm/src/core_api.rs`
+  tenía 27 bloques de drift de formato (nunca se corrió `cargo fmt` después de ediciones
+  recientes al X3DH/ML-KEM). **Fix**: `cargo fmt` sobre todo el crate (incluye
+  `dh_ratchet.rs`, mismo drift, un solo bloque). Verificado: `cargo fmt -- --check` → exit 0.
+- **`rust.yml` ("asan_ubsan_fuzz") — el fuzz target de `decrypt_message` no compilaba.**
+  `hermes_crypto_wasm/fuzz/fuzz_targets/decrypt_fuzzer.rs:27` llamaba
+  `core.decrypt_message("dummy_session".to_string(), data.to_vec())`, pero la firma real
+  (`core_api.rs:422`) es `decrypt_message(&self, contact_id: &str, ciphertext_json: &[u8])`
+  — el harness quedó desactualizado tras un cambio de firma anterior y nunca se detectó
+  porque este job jamás había corrido en CI real. **Fix**: una línea,
+  `core.decrypt_message("dummy_session", data)`.
+- **`security_ci.yml`/`rust.yml` (clippy `-D warnings`) — 12 errores reales, no cosméticos,
+  en el núcleo cripto.** Arreglar el `cargo fmt` destapó que el MISMO gate también corre
+  `cargo clippy -- -D warnings`, y ESE fallaba con 12 errores propios:
+  - **10× `Array::from_slice` deprecado** (`Key::<Aes256Gcm>::from_slice`/`Nonce::from_slice`)
+    en la construcción real de clave/nonce AES-256-GCM — 5 sitios en `core_api.rs`
+    (`seal_for_contact`, `open_from_contact`, `decrypt_group_ephemeral_image`) y 3 en
+    `lib.rs` (`encrypt_legacy_payload`, `decrypt_legacy_payload`, más un nonce). Migrado a
+    `TryFrom` (`Key::<Aes256Gcm>::try_from(bytes.as_slice()).map_err(|_| ...)?`), siguiendo
+    el mismo idioma "Fail-Closed: ..." que ya usa el resto del archivo. **Efecto colateral
+    de seguridad, no buscado a propósito**: en `open_from_contact` (nonce viene de un JSON
+    externo, `sealed_json`) y en `decrypt_legacy_payload` (nonce viene de un
+    `encrypted_package` externo), el `from_slice` deprecado **paniqueaba** ante una longitud
+    de nonce inválida — cualquiera podía tirar el proceso WASM mandando un nonce corto en
+    un mensaje malformado. Con `TryFrom` ahora es un `Err` limpio (fail-closed real), no un
+    panic (DoS). En `decrypt_group_ephemeral_image` la longitud ya se validaba antes
+    explícitamente, así que ahí el `from_slice` nunca podía panicar en la práctica — el
+    `TryFrom` ahí es solo higiene, sin cambio de comportamiento observable.
+  - 2 lints sueltos sin relación con lo anterior: `WORDLIST` (2048 entradas BIP-39) pasado
+    de `const` a `static` (recomendación de `clippy::large_const_arrays`, evita duplicar el
+    array en cada sitio de uso), y un borrow de más en `Sha256::digest(&entropy)` →
+    `Sha256::digest(entropy)`.
+  - **Verificado real, no solo "compila"**: nuevo `hermes_crypto_wasm/tests/tryfrom_migration_test.rs`
+    (`wasm-pack test --node`) ejercita las 5 funciones tocadas de punta a punta: roundtrip
+    `seal_for_contact`/`open_from_contact` con llaves ML-KEM-1024 reales, rechazo correcto
+    con la llave de decapsulación equivocada (`Err`, no panic), roundtrip
+    `decrypt_group_ephemeral_image` contra un blob cifrado con `aes_gcm` directo más el
+    caso de clave de 31 bytes, y roundtrip `encrypt_legacy_payload`/`decrypt_legacy_payload`
+    más el caso de nonce de 3 bytes. **18/18 tests pasan** (14 preexistentes + 4 nuevos) —
+    cero regresión en ningún camino de cifrado tocado. `cargo fmt -- --check` y
+    `cargo clippy -- -D warnings` (comando exacto de los dos workflows) limpios. Artefacto
+    real reconstruido (`build_wasm.sh` + `npm run build` del frontend) sin errores.
+  - **Pendiente a propósito, no arreglado en esta pasada**: `python.yml` ("test_and_ast")
+    también falla en el mismo push, pero por una causa distinta y no mecánica — Semgrep
+    (`semgrep.yml`, regla `sensitive-data-in-memory`) bloquea con 17 hallazgos reales sobre
+    manejo de secretos en memoria sin `del`/zeroización explícita en
+    `hybrid_encryptor.py`/`kyber_manager.py`/`native_core.py`/`sphincs_manager.py`/
+    `db_connection.py`. Se decidió explícitamente no tocarlo en el mismo lote que los fixes
+    mecánicos de arriba — toca código de cripto real y necesita revisión caso por caso para
+    no debilitar ninguna garantía, no un fix automático.
+
 ## ✅ Ya resuelto (2026-08-27)
 
 - Bypass de autenticación en `/api/login` (no verificaba nada — cualquiera se autenticaba

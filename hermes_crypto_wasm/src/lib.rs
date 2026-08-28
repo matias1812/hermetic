@@ -21,14 +21,14 @@ pub mod domain;
 pub mod ratchet;
 pub mod storage;
 
+use aes_gcm::aead::{Aead as AesGcmAead, KeyInit as AesGcmKeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use sha3::{Digest, Sha3_256};
 use sha2::Sha256;
-use aes_gcm::{Aes256Gcm, Key, Nonce};
-use aes_gcm::aead::{Aead as AesGcmAead, KeyInit as AesGcmKeyInit};
+use sha3::{Digest, Sha3_256};
 use wasm_bindgen::prelude::*;
 use zeroize::Zeroize;
 
@@ -371,43 +371,79 @@ impl HermesEngineWasm {
         let mut hasher = Sha256::new();
         hasher.update(session_key_bytes);
         let aes_key_bytes = hasher.finalize();
-        
-        let key = Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        
+
+        let key = Key::<Aes256Gcm>::try_from(aes_key_bytes.as_slice()).map_err(|_| {
+            JsValue::from_str("Fail-Closed: longitud de clave AES-256-GCM inválida")
+        })?;
+        let cipher = Aes256Gcm::new(&key);
+
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).map_err(|_| {
+            JsValue::from_str("Fail-Closed: longitud de nonce AES-256-GCM inválida")
+        })?;
+
         let timestamp = (js_sys::Date::now() / 1000.0) as u64;
         let aad_string = format!("{}:{}:{}", sender_id, receiver_id, timestamp);
-        
+
         let payload = aes_gcm::aead::Payload {
             msg: text.as_bytes(),
             aad: aad_string.as_bytes(),
         };
-        
-        let ciphertext = AesGcmAead::encrypt(&cipher, nonce, payload)
+
+        let ciphertext = AesGcmAead::encrypt(&cipher, &nonce, payload)
             .map_err(|e| JsValue::from_str(&format!("AES-GCM encryption failed: {:?}", e)))?;
-        
+
         let iv_hex = hex::encode(nonce_bytes);
         let ct_hex = hex::encode(ciphertext);
-        
+
         let mut sig_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut sig_bytes);
         let sig_hex = hex::encode(sig_bytes);
-        
+
         let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &JsValue::from_str("ciphertext_kem"), &JsValue::from_str(""))?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("wrapped_otp_key"), &JsValue::from_str(&ct_hex))?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("stego_container"), &JsValue::from_str(""))?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("ciphertext_kem"),
+            &JsValue::from_str(""),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("wrapped_otp_key"),
+            &JsValue::from_str(&ct_hex),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("stego_container"),
+            &JsValue::from_str(""),
+        )?;
         js_sys::Reflect::set(&obj, &JsValue::from_str("audio_spectrum"), &JsValue::null())?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("signature"), &JsValue::from_str(&sig_hex))?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("timestamp"), &JsValue::from_f64(timestamp as f64))?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("aes_nonce"), &JsValue::from_str(&iv_hex))?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("sender_id"), &JsValue::from_str(sender_id))?;
-        js_sys::Reflect::set(&obj, &JsValue::from_str("receiver_id"), &JsValue::from_str(receiver_id))?;
-        
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("signature"),
+            &JsValue::from_str(&sig_hex),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("timestamp"),
+            &JsValue::from_f64(timestamp as f64),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("aes_nonce"),
+            &JsValue::from_str(&iv_hex),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("sender_id"),
+            &JsValue::from_str(sender_id),
+        )?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("receiver_id"),
+            &JsValue::from_str(receiver_id),
+        )?;
+
         Ok(obj.into())
     }
 
@@ -421,9 +457,11 @@ impl HermesEngineWasm {
         let mut hasher = Sha256::new();
         hasher.update(session_key_bytes);
         let aes_key_bytes = hasher.finalize();
-        let key = Key::<Aes256Gcm>::from_slice(&aes_key_bytes);
-        let cipher = Aes256Gcm::new(key);
-        
+        let key = Key::<Aes256Gcm>::try_from(aes_key_bytes.as_slice()).map_err(|_| {
+            JsValue::from_str("Fail-Closed: longitud de clave AES-256-GCM inválida")
+        })?;
+        let cipher = Aes256Gcm::new(&key);
+
         let get_string = |obj: &JsValue, prop: &str| -> String {
             js_sys::Reflect::get(obj, &JsValue::from_str(prop))
                 .unwrap_or(JsValue::null())
@@ -436,30 +474,32 @@ impl HermesEngineWasm {
                 .as_f64()
                 .unwrap_or(0.0) as u64
         };
-        
+
         let iv_hex = get_string(encrypted_package, "aes_nonce");
         let ct_hex = get_string(encrypted_package, "wrapped_otp_key");
         let sender_id = get_string(encrypted_package, "sender_id");
         let receiver_id = get_string(encrypted_package, "receiver_id");
         let timestamp = get_number(encrypted_package, "timestamp");
-        
+
         if iv_hex.is_empty() {
             return Err(JsValue::from_str("Missing aes_nonce in encrypted package"));
-        }        
+        }
         let iv_bytes = hex::decode(&iv_hex).map_err(|_| JsValue::from_str("Invalid IV hex"))?;
         let ct_bytes = hex::decode(&ct_hex).map_err(|_| JsValue::from_str("Invalid CT hex"))?;
-        
-        let nonce = Nonce::from_slice(&iv_bytes);
-        
+
+        let nonce = Nonce::try_from(iv_bytes.as_slice()).map_err(|_| {
+            JsValue::from_str("Fail-Closed: longitud de nonce AES-256-GCM inválida")
+        })?;
+
         let aad_string = format!("{}:{}:{}", sender_id, receiver_id, timestamp);
         let payload = aes_gcm::aead::Payload {
             msg: ct_bytes.as_slice(),
             aad: aad_string.as_bytes(),
         };
-        
-        let plaintext_bytes = AesGcmAead::decrypt(&cipher, nonce, payload)
+
+        let plaintext_bytes = AesGcmAead::decrypt(&cipher, &nonce, payload)
             .map_err(|e| JsValue::from_str(&format!("AES-GCM decryption failed: {:?}", e)))?;
-            
+
         String::from_utf8(plaintext_bytes)
             .map_err(|_| JsValue::from_str("Invalid UTF-8 in decrypted payload"))
     }
