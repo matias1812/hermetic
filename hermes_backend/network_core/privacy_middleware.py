@@ -106,5 +106,9 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
         else:
             logger.critical("CRITICAL PRIVACY FAILURE: Libreria Rust ip_lib no cargada. Activando modo degradado (0.0.0.0)")
         
-        # Fallback ultra-seguro
-        return "0.0.0.0"
+        # Fallback ultra-seguro: placeholder de log cuando la anonimizacion real
+        # (Rust ip_lib) no esta disponible, NO un bind de socket -- Bandit B104
+        # ("hardcoded_bind_all_interfaces") es un falso positivo aca, pensado para
+        # detectar host="0.0.0.0" en server.bind()/app.run(), no un string devuelto para
+        # loguear en vez de la IP real.
+        return "0.0.0.0"  # nosec B104

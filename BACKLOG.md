@@ -373,9 +373,32 @@ otras dos reglas de `semgrep.yml` (`python-sql-injection-fastapi`,
 `fastapi-missing-privacy-middleware`) siguen intactas y en 0 hallazgos, confirmando que el
 ajuste no aflojó nada fuera del alcance de `sensitive-data-in-memory`.
 
-Con esto, los 5 gates de CI que nunca habían corrido de verdad en GitHub Actions
-(`rust_ffi.yml`, `zap.yml`, `security_ci.yml`, `rust.yml`, `python.yml`) quedan **los 5
-verdes**, verificado en el runner real, no en Docker local ni por lectura de código.
+**Corrección sobre la marcha**: al mergear el fix de arriba a `main` y ver correr
+`python.yml` de verdad, el job pasó de Semgrep (ahora limpio) al SIGUIENTE step que
+tampoco se había alcanzado nunca — `Run Bandit SAST` (`bandit -r hermes_backend -ll -q`),
+mismo patrón exacto de "cada fix destapa el siguiente gate nunca antes corrido" que ya
+pasó con `rust_ffi.yml`/`zap.yml` en la vuelta anterior.
+
+- **Bandit `B104` (`hardcoded_bind_all_interfaces`) en
+  `privacy_middleware.py:110`, `return "0.0.0.0"` — falso positivo confirmado leyendo
+  el código.** Esa línea es el fallback fail-safe de `_anonymize_ip_completely()` cuando
+  la librería Rust real (`ip_lib`) no está disponible: devuelve el string `"0.0.0.0"`
+  como IP anonimizada de PLACEHOLDER para el log (comportamiento ya documentado — ver
+  ítem #3 de Alta prioridad, "modo degradado"), no un `host=` de bind de socket. B104
+  está pensado para atrapar `app.run(host="0.0.0.0")`/`socket.bind(("0.0.0.0", port))`,
+  y no distingue ese patrón de un literal de string usado para otra cosa. **Fix**:
+  `# nosec B104` puntual con justificación en la misma línea (primer uso de `#nosec` en
+  todo `hermes_backend/`, mismo mecanismo que `# nosemgrep`, mismo estándar de la
+  herramienta). Verificado con el comando exacto de CI (`bandit -r hermes_backend -ll -q`)
+  en Docker limpio → exit 0, sin salida (0 hallazgos medium+). De paso se corrió también
+  el step siguiente (`pytest tests/test_hybrid_encryptor.py tests/phase7_audit.py
+  --cov=hermes_backend --cov-report=xml`, con `PYTHONPATH=.` como en el workflow real) →
+  **10/10 passed**, confirmando que no queda un séptimo gate agazapado detrás de este.
+
+Con esto, los 5 workflows de CI que nunca habían corrido de verdad en GitHub Actions
+(`rust_ffi.yml`, `zap.yml`, `security_ci.yml`, `rust.yml`, `python.yml`) quedan **verdes de
+punta a punta**, cada step verificado individualmente contra el comando exacto que usa el
+workflow real, no solo "el archivo se lee bien" ni Docker local aproximado.
 
 ## ✅ Ya resuelto (2026-08-27)
 

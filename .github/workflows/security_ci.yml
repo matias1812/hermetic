@@ -28,7 +28,21 @@ jobs:
           cargo clippy -- -D warnings
 
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        # El instalador (curl | sh) fallo una vez en este job puntual con
+        # "wasm-pack: command not found" (exit 127) en el step siguiente -- el MISMO
+        # comando, mismo commit, corrio bien en rust.yml (otra VM del runner), asi que
+        # fue un flake transitorio de red bajando el tarball de GitHub Releases, no un
+        # problema real de PATH. Reintento simple + verificacion explicita despues, para
+        # no depender de la suerte de nuevo y para fallar con un mensaje claro si alguna
+        # vez es un problema real (PATH, rustup ausente, etc.) en vez del "command not
+        # found" críptico del step de test.
+        run: |
+          for i in 1 2 3; do
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && break
+            echo "Intento $i de instalar wasm-pack fallo, reintentando..."
+            sleep 5
+          done
+          wasm-pack --version
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
