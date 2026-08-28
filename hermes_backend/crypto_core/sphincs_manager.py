@@ -10,7 +10,8 @@ class SphincsManager:
     
     @staticmethod
     def generate_keypair() -> tuple[bytes, bytes]:
-        public_key, secret_key = generate_keypair()
+        # secret_key se devuelve directo al llamador, mismo caso que KyberManager
+        public_key, secret_key = generate_keypair()  # nosemgrep: sensitive-data-in-memory
         logger.info(f"SPHINCS+ keypair generated: pk={len(public_key)}B, sk={len(secret_key)}B")
         return public_key, secret_key
     

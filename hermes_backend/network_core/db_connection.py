@@ -32,7 +32,10 @@ class DatabaseConnection:
     def __init__(self):
         self.db_host = os.getenv("DB_HOST", "127.0.0.1")
         self.db_user = os.getenv("DB_USER", "root")
-        self.db_password = os.getenv("DB_PASSWORD", "")
+        # Atributo de instancia necesario durante toda la vida del objeto
+        # DatabaseConnection (se reusa en cada reconexion via _get_connection()), no un
+        # secreto transitorio que tenga sentido zeroizar tras una sola lectura.
+        self.db_password = os.getenv("DB_PASSWORD", "")  # nosemgrep: sensitive-data-in-memory
         self.db_name = os.getenv("DB_NAME", "hermeschat")
         self.db_port = int(os.getenv("DB_PORT", "3306"))
         

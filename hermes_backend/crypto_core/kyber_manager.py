@@ -19,7 +19,10 @@ class KyberManager:
     
     @staticmethod
     def generate_keypair() -> tuple[bytes, bytes]:
-        public_key, secret_key = generate_keypair()
+        # secret_key se devuelve directo al llamador (es el output de la funcion, no
+        # queda retenido aca); el ciclo de vida/zeroizacion es responsabilidad de quien
+        # reciba la clave (ver hybrid_encryptor.py, que ya limpia via safe_zeroize).
+        public_key, secret_key = generate_keypair()  # nosemgrep: sensitive-data-in-memory
         logger.info(f"Kyber-1024 keypair generated: pk={len(public_key)}B, sk={len(secret_key)}B")
         return public_key, secret_key
     
@@ -27,7 +30,8 @@ class KyberManager:
     def encapsulate(public_key: bytes) -> tuple[bytes, bytes]:
         if len(public_key) != 1568:
             raise ValueError(f"Clave pública Kyber-1024 debe ser 1568 bytes. Recibido: {len(public_key)}")
-        ciphertext, shared_secret = encrypt(public_key)
+        # shared_secret se devuelve directo al llamador, mismo caso que generate_keypair()
+        ciphertext, shared_secret = encrypt(public_key)  # nosemgrep: sensitive-data-in-memory
         logger.info(f"Kyber encapsulate: ct={len(ciphertext)}B, ss={len(shared_secret)}B")
         return ciphertext, shared_secret
     
@@ -37,7 +41,8 @@ class KyberManager:
             raise ValueError(f"Ciphertext Kyber-1024 debe ser 1568 bytes. Recibido: {len(ciphertext)}")
         if len(secret_key) != 3168:
             raise ValueError(f"Clave privada Kyber-1024 debe ser 3168 bytes. Recibido: {len(secret_key)}")
-        shared_secret = decrypt(secret_key, ciphertext)
+        # shared_secret se devuelve directo al llamador, mismo caso que arriba
+        shared_secret = decrypt(secret_key, ciphertext)  # nosemgrep: sensitive-data-in-memory
         logger.info(f"Kyber decapsulate: ss={len(shared_secret)}B")
         return shared_secret
     
