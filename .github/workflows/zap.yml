@@ -46,7 +46,13 @@ jobs:
           exit 1
 
       - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.12.0
+        # v0.12.0 subia el reporte con una version deprecada de upload-artifact que el
+        # backend de GitHub Actions ya rechaza ("Create Artifact Container failed: the
+        # artifact name zap_scan is not valid") -- el scan en si corria bien (0 FAIL, el
+        # Issue de resultados se creaba), pero el job igual quedaba en rojo por esto.
+        # v0.14.0 es exactamente el release que dice "stop using deprecated upload-artifact
+        # version" en su changelog.
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: 'http://localhost:8000'
           cmd_options: '-a'
