@@ -10,6 +10,13 @@ jobs:
   zap_scan:
     runs-on: ubuntu-latest
     name: Scan the webapplication
+    # zaproxy/action-baseline abre/actualiza un Issue de GitHub con los hallazgos cuando
+    # el scan encuentra algo (aunque sea solo WARN, no FAIL) -- sin este permiso explicito
+    # el GITHUB_TOKEN por defecto no alcanza y el job falla con "Resource not accessible
+    # by integration" DESPUES de escanear correctamente (0 FAIL, hallazgos reales o no).
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
