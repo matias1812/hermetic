@@ -1,5 +1,4 @@
 // backup_manager.js
-import { RecoveryKeyManager } from './recovery_key_manager.js';
 import { hermesBridge } from './crypto_wasm_bridge.js';
 import { state } from './state.js';
 import { CryptoClient } from './crypto_client.js';
@@ -33,7 +32,6 @@ export class BackupManager {
         this.backupIndex      = 'hermes_backups';
         this._autoBackupTimer = null;   // setInterval handle
         this._autoBackupBound = [];     // event listener references
-        this._recoveryKey     = null;   // CryptoKey para auto-backup remoto
     }
 
     // ─────────────────────────────────────────
@@ -249,7 +247,7 @@ export class BackupManager {
         const hexData = this._bufferToHex(encryptedBuffer);
         const timestamp = Math.floor(Date.now() / 1000);
         const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
-        const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+        const sessionToken = sessionStorage.getItem('hermes_session_token');
 
         const headers = { 'Content-Type': 'application/json' };
         if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
@@ -682,13 +680,10 @@ export class BackupManager {
     /**
      * Inicia el sistema de auto-backup.
      *
-     * @param {string}    password   - Contraseña para cifrar los backups locales
-     * @param {CryptoKey} [recoveryKey] - CryptoKey opcional para backup remoto cifrado con mnemónica
+     * @param {string} password - Contraseña para cifrar los backups locales
      */
-    startAutoBackup(password, recoveryKey = null) {
+    startAutoBackup(password) {
         if (this._autoBackupTimer) return; // Ya activo
-
-        this._recoveryKey = recoveryKey;
 
         // Backup inmediato
         this._doAutoBackup(password).catch(e =>
@@ -729,7 +724,6 @@ export class BackupManager {
             document.removeEventListener(event, fn);
         }
         this._autoBackupBound = [];
-        this._recoveryKey     = null;
         console.log('[BackupManager] Auto-backup detenido');
     }
 
@@ -761,22 +755,11 @@ export class BackupManager {
 
             allData.checksum = await this.calculateChecksum(allData);
 
-            // 2. Si hay recovery key → cifrar y subir al servidor (remoto)
-            if (this._recoveryKey) {
-                const jsonBytes  = new TextEncoder().encode(JSON.stringify(allData));
-                const compressed = await BackupManager._compressGzip(jsonBytes);
-                const encrypted  = await RecoveryKeyManager.encryptWithRecoveryKey(
-                    this._recoveryKey, compressed
-                );
+            // El respaldo remoto cifrado con la frase de recuperación (mnemónica) lo
+            // maneja recoverySystem.autoBackup() (recovery_system_complete.js) — única
+            // implementación; este método solo mantiene el índice local.
 
-                try {
-                    await this.uploadToCloud(encrypted, 'recovery', 'AES-GCM/RecoveryKey');
-                } catch (e) {
-                    console.warn('[BackupManager] Upload remoto falló:', e.message);
-                }
-            }
-
-            // 3. Registrar en índice local
+            // 2. Registrar en índice local
             const metadata = {
                 backupSize:    0,  // Sin archivo descargado
                 totalImages:   0,

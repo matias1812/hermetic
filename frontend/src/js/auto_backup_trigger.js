@@ -53,7 +53,7 @@ export class AutoBackupTrigger {
 
         const settings = window.privacySettings?.settings;
         const dest = settings?.backupDestination || 'local';
-        const encryptionKey = localStorage.getItem('hermes_recovery_key_cache') || (state.storage.getUserId() + '_local_auto_key');
+        const encryptionKey = localStorage.getItem('hermes_recovery_key_cache_' + state.storage.getUserId()) || (state.storage.getUserId() + '_local_auto_key');
 
         try {
             const allData = await state.backup._collectAllData();
@@ -83,7 +83,7 @@ export class AutoBackupTrigger {
                 this.showBackupToast('tu Dispositivo (Local Index)');
             }
             
-            localStorage.setItem('hermes_last_auto_backup', Date.now().toString());
+            localStorage.setItem('hermes_last_auto_backup_' + state.storage.getUserId(), Date.now().toString());
         } catch (error) {
             console.warn('⚠️ Auto-backup failed:', error);
         }

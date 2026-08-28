@@ -20,6 +20,21 @@ export class EncryptedStorageManager {
     
     setUserId(idHash) {
         if (!idHash || idHash === "undefined" || idHash === "null") return;
+        if (this.currentUserIdHash !== idHash) {
+            // CRÍTICO: si la bóveda ya se había "desbloqueado" para otro contexto de
+            // usuario (p.ej. PrivacySettings hace un load() en segundo plano al
+            // arrancar la página, antes de cualquier login, con userId '' y la
+            // contraseña por defecto — ver isUnlocked más abajo), ese flag quedaba
+            // en true para siempre. El login real de auth_ui.js sólo llama a
+            // unlock(password) si !isUnlocked, así que se saltaba el desbloqueo con
+            // la contraseña REAL y toda la sesión quedaba operando con la clave
+            // equivocada — cada load()/save() posterior fallaba al descifrar
+            // ("posible resto de cuenta anterior"), lo cual a su vez hacía que
+            // bloques que persisten "lo que se acaba de cargar" (p.ej. el filtro de
+            // auto-referencia en contactos) reescribieran datos buenos con vacío.
+            // Forzar un re-unlock real cada vez que el usuario efectivo cambia.
+            this.isUnlocked = false;
+        }
         this.currentUserIdHash = idHash;
         sessionStorage.setItem('session_user_id_hash', idHash);
     }
@@ -66,9 +81,19 @@ export class EncryptedStorageManager {
                 this.isUnlocked = true;
                 return true;
             } catch (e) {
-                if (String(e).includes('NotImplemented')) {
-                    console.warn("[StorageManager] Cifrado local FFI pendiente (Fail-Closed en FASE 3).");
+                if (!String(e).includes('NotImplemented')) {
+                    // Contraseña equivocada (o marcador corrupto) contra un marcador
+                    // que YA existe. Antes esto caía de largo hacia el bloque de abajo,
+                    // que reescribe el marcador con la contraseña recién tipeada y
+                    // devuelve éxito igual — aceptando CUALQUIER contraseña una vez
+                    // pasado el primer desbloqueo real, y dejando la bóveda desbloqueada
+                    // con una clave que ya no coincide con nada de lo cifrado en disco
+                    // (de ahí los "Error de descifrado... posible resto de cuenta
+                    // anterior" en cascada). Fallar cerrado de verdad acá.
+                    this.isUnlocked = false;
+                    return false;
                 }
+                console.warn("[StorageManager] Cifrado local FFI pendiente (Fail-Closed en FASE 3).");
             }
         }
         

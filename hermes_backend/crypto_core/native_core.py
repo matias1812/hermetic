@@ -47,10 +47,16 @@ NATIVE_AVAILABLE = (
 if NATIVE_AVAILABLE:
     import hermes_ffi
 
+    # Deben coincidir exactamente con los nombres que llaman generate_keys/encrypt_envelope/
+    # decrypt_envelope/dispose_key_handle más abajo en este archivo -- si difieren, este gate
+    # puede dar NATIVE_AVAILABLE=True y aun así explotar con AttributeError en el primer uso
+    # real (encontrado en auditoría: encrypt_envelope_native/decrypt_envelope_native nunca
+    # coincidieron con encapsulate_and_encrypt_native/decrypt_and_decapsulate_native, las
+    # funciones que realmente se invocan).
     required_symbols = {
         "generate_keys_native",
-        "encrypt_envelope_native",
-        "decrypt_envelope_native",
+        "encapsulate_and_encrypt_native",
+        "decrypt_and_decapsulate_native",
         "dispose_key_handle",
     }
 

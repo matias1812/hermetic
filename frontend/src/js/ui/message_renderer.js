@@ -3,6 +3,17 @@ import { state, showToast } from '../state.js';
 import { AudioRecorder } from '../audio_recorder.js';
 import { modalManager } from './modal_manager.js';
 import { StateRenderer } from './state_renderer.js';
+import { ephemeralStore, isEphemeralType } from '../ephemeral_store.js';
+
+async function deleteRenderedMessage(storage, chats, targetId, msg) {
+    // Los efímeros nunca se persistieron — sacarlos del registro en memoria
+    // alcanza. Para todo lo demás, el borrado real sigue siendo en disco.
+    if (isEphemeralType(msg.type)) {
+        ephemeralStore.remove(targetId, msg.id);
+    } else {
+        await chats.deleteMessage(storage, targetId, msg.id);
+    }
+}
 
 export function renderMessages() {
     const container = document.getElementById("chat-messages");
@@ -46,7 +57,7 @@ export function renderMessages() {
         const timeSpan = document.createElement('span');
         timeSpan.textContent = `PQC \u00B7 ${msg.timestamp}`;
 
-        if (isSelf && state.activeContact) {
+        if (isSelf && (state.activeContact || state.activeGroup)) {
             const tickEl = document.createElement('span');
             if (msg.status === 'read') {
                 tickEl.className = 'text-cyan-400 font-bold ml-1';
@@ -321,7 +332,7 @@ export function renderMessages() {
             
             audioEl.addEventListener('ended', async () => {
                 const targetId = state.activeContact || state.activeGroup;
-                await state.chats.deleteMessage(state.storage, targetId, msg.id);
+                await deleteRenderedMessage(state.storage, state.chats, targetId, msg);
                 try {
                     const payload = {
                         type: "ephemeral_viewed",
@@ -386,7 +397,7 @@ export function renderMessages() {
                 
                 setTimeout(async () => {
                     const targetId = state.activeContact || state.activeGroup;
-                    await state.chats.deleteMessage(state.storage, targetId, msg.id);
+                    await deleteRenderedMessage(state.storage, state.chats, targetId, msg);
                     try {
                         const payload = {
                             type: "ephemeral_viewed",
@@ -524,7 +535,7 @@ export async function confirmDeleteMessage(msg, everyone) {
 
     try {
         const targetId = state.activeContact || state.activeGroup;
-        await state.chats.deleteMessage(state.storage, targetId, msg.id);
+        await deleteRenderedMessage(state.storage, state.chats, targetId, msg);
 
         if (everyone) {
             await state.sync.sendBlob(state.currentUser, targetId, {
@@ -602,8 +613,16 @@ export function openEphemeralImageModal(msg) {
             state.screenshotDetector.disableProtection();
         }
 
+        // Imagen efímera de grupo con custodia temporal en servidor (ver BACKLOG.md):
+        // además del ephemeral_viewed E2E de arriba (que sigue alimentando el contador
+        // "VISTO POR: x/y" del emisor), avisamos al servidor para que libere/zeroice
+        // su copia cuando todos la hayan visto.
+        if (msg.image_id) {
+            state.sync.markGroupEphemeralImageViewed(msg.image_id).catch(() => {});
+        }
+
         const targetId = state.activeContact || state.activeGroup;
-        await state.chats.deleteMessage(state.storage, targetId, msg.id);
+        await deleteRenderedMessage(state.storage, state.chats, targetId, msg);
         state.chatMessages = state.chats.getMessages(targetId);
         renderMessages();
     };

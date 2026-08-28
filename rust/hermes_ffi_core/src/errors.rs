@@ -13,7 +13,7 @@ pub enum ReplayError {
 
     #[error("State not found.")]
     NotFound,
-    
+
     #[error("Internal storage error: {0}")]
     StorageError(String),
 }

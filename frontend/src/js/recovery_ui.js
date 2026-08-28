@@ -1,8 +1,6 @@
-import { CompleteRecoverySystem } from './recovery_system_complete.js';
+import { recoverySystem } from './recovery_system_complete.js';
 import { state, showToast } from './state.js';
 import { modalManager } from './ui/modal_manager.js';
-
-export const recoverySystem = new CompleteRecoverySystem();
 
 export function setupRecoveryUI() {
     const btnGenerate = document.getElementById('btn-generate-master-key');
@@ -37,7 +35,7 @@ export function setupRecoveryUI() {
                 }
                 
                 if (displayArea) displayArea.classList.remove('hidden');
-                localStorage.setItem('hermes_master_key_set', 'true');
+                localStorage.setItem('hermes_master_key_set_' + idHash, 'true');
                 const mkBadge = document.getElementById('mk-status-badge');
                 if (mkBadge) {
                     mkBadge.textContent = 'ACTIVA';

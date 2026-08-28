@@ -1,6 +1,6 @@
 // messaging_tests.js
 import { state } from './state.js';
-import { ephemeralAudio } from './ephemeral_audio.js';
+import { ephemeralStore } from './ephemeral_store.js';
 
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
@@ -149,22 +149,25 @@ export class MessagingVerifier {
     }
 
     async testEphemeralAudio() {
-        console.log('\n🎤⏳ TEST: Audio efímero');
+        console.log('\n🎤⏳ TEST: Audio efímero (nunca debe tocar hermes_messages)');
         try {
-            const audioBlob = new Blob(['test_ephem_audio'], { type: 'audio/webm' });
-            // Simular creación de grupo de prueba en state
-            state.groups.userGroups.push({
-                id: 'grp_ephem_qa',
-                name: 'QA Ephemeral Group',
-                members: ['tester', 'user2']
-            });
-            const audioId = await ephemeralAudio.sendEphemeralAudio('grp_ephem_qa', audioBlob, 5);
-            ephemeralAudio.markAsListened(audioId, 'user2');
-            console.log('  Enviado: ✅');
-            console.log('  Destruido: ✅');
-            return { test: 'Audio efímero', passed: true };
+            const targetId = 'qa_ephemeral_target';
+            const msg = { id: 'qa_ephemeral_audio_1', type: 'ephemeral_audio', plaintext: 'data:audio/webm;base64,AAA=' };
+
+            ephemeralStore.add(targetId, msg);
+            const visibleBeforeDestroy = state.chats.getMessages(targetId).some(m => m.id === msg.id);
+
+            ephemeralStore.remove(targetId, msg.id);
+            const absentAfterDestroy = !state.chats.getMessages(targetId).some(m => m.id === msg.id);
+            const neverOnDisk = !(state.chats.history[targetId] || []).some(m => m.id === msg.id);
+
+            console.log(`  Visible antes de destruir: ${visibleBeforeDestroy ? '✅' : '❌'}`);
+            console.log(`  Ausente después de destruir: ${absentAfterDestroy ? '✅' : '❌'}`);
+            console.log(`  Nunca escrito en hermes_messages: ${neverOnDisk ? '✅' : '❌'}`);
+
+            return { test: 'Audio efímero (sin rastro)', passed: visibleBeforeDestroy && absentAfterDestroy && neverOnDisk };
         } catch (e) {
-            return { test: 'Audio efímero', passed: false };
+            return { test: 'Audio efímero (sin rastro)', passed: false };
         }
     }
 

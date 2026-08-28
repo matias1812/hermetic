@@ -5,8 +5,10 @@ export class ModalManager {
         this.ensureModalContainer();
         this.activeModal = null;
         this.lastFocused = null;
+        this.blockDismiss = false; // true mientras un modal crítico (ej. frase de recuperación) exige confirmación explícita
         this.escapeListener = (e) => {
             if (e.key === 'Escape' && this.activeModal) {
+                if (this.blockDismiss) { e.preventDefault(); return; }
                 e.preventDefault();
                 // Check if it's the dynamic hermes root which uses promises
                 if (this.activeModal.id === 'hermes-modal-root' && this.currentResolve) {
@@ -18,10 +20,11 @@ export class ModalManager {
             }
         };
         document.addEventListener('keydown', this.escapeListener);
-        
+
         // Universal backdrop click
         document.addEventListener('click', (e) => {
             if (this.activeModal && e.target === this.activeModal) {
+                if (this.blockDismiss) return;
                 if (this.activeModal.id === 'hermes-modal-root' && this.currentResolve) {
                     const cancelVal = this.currentButtons?.length > 0 && this.currentButtons[0].resolveValue === false ? false : null;
                     this.closeModal(this.activeModal, this.currentResolve, cancelVal);
@@ -194,6 +197,75 @@ export class ModalManager {
     close() {
         const root = document.getElementById('hermes-modal-root');
         this.closeModal(root, this.currentResolve, null);
+    }
+
+    /**
+     * Modal de la frase de recuperación al registrarse. No se puede cerrar con
+     * Escape/click-afuera (this.blockDismiss) y exige re-escribir 2 palabras
+     * al azar de la frase antes de aceptar "YA LA GUARDÉ" — sin esto, un click
+     * accidental o un usuario apurado podía "confirmar" sin haber anotado nada.
+     */
+    async mandatoryRecoveryPhrase(mnemonic) {
+        return new Promise((resolve) => {
+            const root = document.getElementById('hermes-modal-root');
+            const words = mnemonic.split(' ');
+
+            let idxA = Math.floor(Math.random() * words.length);
+            let idxB = Math.floor(Math.random() * words.length);
+            while (idxB === idxA) idxB = Math.floor(Math.random() * words.length);
+            const checks = [idxA, idxB].sort((a, b) => a - b);
+
+            const renderStep1 = () => {
+                root.innerHTML = `
+                    <div class="bg-gray-900 border border-terminalGreen rounded-lg p-6 max-w-2xl w-full mx-4 shadow-2xl relative" role="dialog" aria-modal="true">
+                        <h3 class="text-lg font-bold text-terminalGreen mb-4">[ ⚠️ GUARDA ESTA FRASE DE RECUPERACIÓN ]</h3>
+                        <div class="mb-2 text-gray-300 overflow-hidden break-words">
+                            <p>Anota estas 12 palabras en orden, en papel o un gestor de contraseñas. Es la ÚNICA forma de recuperar tu cuenta si pierdes este dispositivo — nadie más puede dártelas de nuevo.</p>
+                            <div class="bg-black p-4 rounded text-terminal text-center my-4 select-all text-xl border border-gray-700">${mnemonic}</div>
+                        </div>
+                        <div class="flex justify-end mt-4">
+                            <button id="hermes-recovery-continue" class="btn-cyber w-full py-2">YA LA ANOTÉ</button>
+                        </div>
+                    </div>
+                `;
+                root.querySelector('#hermes-recovery-continue').onclick = renderStep2;
+            };
+
+            const renderStep2 = () => {
+                root.innerHTML = `
+                    <div class="bg-gray-900 border border-terminalGreen rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl relative" role="dialog" aria-modal="true">
+                        <h3 class="text-lg font-bold text-terminalGreen mb-4">[ CONFIRMA QUE LA ANOTASTE ]</h3>
+                        <div class="mb-4 text-gray-300">
+                            <p class="mb-3 text-sm">Escribe la palabra <b>#${checks[0] + 1}</b> y la palabra <b>#${checks[1] + 1}</b> de la frase que acabas de anotar:</p>
+                            <input type="text" id="hermes-recovery-check-a" placeholder="Palabra #${checks[0] + 1}" autocomplete="off" class="w-full bg-black border border-gray-700 rounded px-3 py-2 text-white mb-3 focus:border-terminalGreen outline-none"/>
+                            <input type="text" id="hermes-recovery-check-b" placeholder="Palabra #${checks[1] + 1}" autocomplete="off" class="w-full bg-black border border-gray-700 rounded px-3 py-2 text-white focus:border-terminalGreen outline-none"/>
+                            <p id="hermes-recovery-check-error" class="text-red-400 text-xs mt-2 hidden">Esas palabras no coinciden con lo que anotaste. Revisa e intenta de nuevo.</p>
+                        </div>
+                        <div class="flex items-stretch space-x-3 mt-4">
+                            <button id="hermes-recovery-back" class="px-4 py-2 border border-gray-600 text-gray-300 rounded hover:bg-gray-800">Volver a ver la frase</button>
+                            <button id="hermes-recovery-confirm" class="btn-cyber flex-1">YA LA GUARDÉ</button>
+                        </div>
+                    </div>
+                `;
+                root.querySelector('#hermes-recovery-back').onclick = renderStep1;
+                root.querySelector('#hermes-recovery-confirm').onclick = () => {
+                    const a = root.querySelector('#hermes-recovery-check-a').value.trim().toLowerCase();
+                    const b = root.querySelector('#hermes-recovery-check-b').value.trim().toLowerCase();
+                    if (a === words[checks[0]].toLowerCase() && b === words[checks[1]].toLowerCase()) {
+                        this.blockDismiss = false;
+                        this.closeModal(root, resolve, true);
+                    } else {
+                        root.querySelector('#hermes-recovery-check-error').classList.remove('hidden');
+                    }
+                };
+            };
+
+            this.currentResolve = resolve;
+            this.currentButtons = [{ resolveValue: false }];
+            this.blockDismiss = true;
+            renderStep1();
+            this.open(root);
+        });
     }
     
     showModal({ title, message, icon = '', buttons = [] }) {

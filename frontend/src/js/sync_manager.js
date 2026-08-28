@@ -3,6 +3,7 @@ import { RealDoubleRatchet } from './double_ratchet.js';
 import { CryptoClient } from './crypto_client.js';
 import { state } from './state.js';
 import { PayloadValidator } from './security/payload_validator.js';
+import { ephemeralStore, isEphemeralType } from './ephemeral_store.js';
 
 export class SyncManager {
     constructor(currentUserAlias, storage, contacts, groups, chats, onMessageReceived) {
@@ -113,27 +114,50 @@ export class SyncManager {
             try {
                 console.log("[SyncManager] Generando llaves en fallback (WASM)...");
                 const generated = hermesBridge.generateIdentityKeys();
-                keys = {
+                const newKeys = {
                     kyber_pk: generated.kyber_pk_hex,
                     kyber_sk: generated.kyber_sk_hex,
                     sphincs_pk: generated.sphincs_pk_hex,
                     sphincs_sk: generated.sphincs_sk_hex
                 };
-                state.userKeys = keys;
-                await this.savePQCKeys(keys);
-                
+
                 const idHash = this.storage.getUserId();
-                await fetch('/api/register', {
+                const reg = await fetch('/api/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         client_id: idHash,
-                        kyber_pk_hex: keys.kyber_pk,
-                        sphincs_pk_hex: keys.sphincs_pk
+                        kyber_pk_hex: newKeys.kyber_pk,
+                        sphincs_pk_hex: newKeys.sphincs_pk
                     })
                 });
+
+                if (!reg.ok) {
+                    // SEC: no guardar/adoptar llaves recién generadas que el servidor
+                    // rechazó (p.ej. 409 porque este id_hash ya está registrado con OTRA
+                    // llave -- desde que db_connection.py::register_user dejó de aceptar
+                    // sobreescrituras). Guardarlas de todos modos habría dejado el
+                    // almacenamiento local con llaves que nunca van a poder autenticar
+                    // contra el servidor: una desincronización auto-infligida, distinta
+                    // pero igual de rota que la vulnerabilidad que este 409 previene.
+                    const detail = await reg.json().catch(() => null);
+                    console.error(`[SyncManager] Fallo al re-registrar llaves de recuperación: HTTP ${reg.status}.`, detail);
+                    if (reg.status === 409 && window.modalManager) {
+                        window.modalManager.alert(
+                            'ERROR DE SINCRONIZACIÓN',
+                            'No se pudieron regenerar tus llaves: este usuario ya está registrado en el servidor con otras llaves. Inicia sesión de nuevo o restaura tu cuenta con tu frase de recuperación.',
+                            'error'
+                        );
+                    }
+                    return null;
+                }
+
+                keys = newKeys;
+                state.userKeys = keys;
+                await this.savePQCKeys(keys);
             } catch (e) {
                 console.error("[SyncManager] Failed to recover PQC keys:", e);
+                return null;
             }
         }
         return keys;
@@ -205,8 +229,10 @@ export class SyncManager {
             if (res.ok) {
                 const data = await res.json();
                 if (data && data.token) {
+                    // Solo sessionStorage: es por-pestaña. Guardarlo también en
+                    // localStorage (compartido entre pestañas) permitía que una
+                    // cuenta abierta en otra ventana pisara/leyera el token de esta.
                     sessionStorage.setItem('hermes_session_token', data.token);
-                    localStorage.setItem('hermes_session_token', data.token);
                 }
             }
         } catch (e) {
@@ -227,7 +253,7 @@ export class SyncManager {
     // no va a ver esta relación más adelante, pero no debe romper el flujo de chat/grupo.
     async registerRelationship(relationshipType, targetId) {
         try {
-            const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+            const token = sessionStorage.getItem('hermes_session_token');
             if (!token) return;
             await fetch('/api/user/relationships', {
                 method: 'POST',
@@ -250,7 +276,7 @@ export class SyncManager {
             const signature = await CryptoClient.signChallenge(challenge, userKeys.sphincs_sk);
 
             const headers = { "Content-Type": "application/json" };
-            const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+            const token = sessionStorage.getItem('hermes_session_token');
             if (token) {
                 headers["Authorization"] = `Bearer ${token}`;
             }
@@ -323,7 +349,7 @@ export class SyncManager {
         for (const msg of [...outbox]) {
             try {
                 const headers = { "Content-Type": "application/json" };
-                const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+                const token = sessionStorage.getItem('hermes_session_token');
                 if (token) {
                     headers["Authorization"] = `Bearer ${token}`;
                 }
@@ -533,7 +559,7 @@ export class SyncManager {
                     : payload.type === 'ephemeral_text' ? 'ephemeral_text'
                     : isAudio ? 'audio' : payload.type;
 
-                await this.chats.addMessage(this.storage, senderId, {
+                const incomingMsg = {
                     id:            envelope.signature,
                     sender:        senderId,
                     receiver:      envelope.receiver_id,
@@ -546,7 +572,13 @@ export class SyncManager {
                     viewed_by:     [],
                     unread:        (this.activeChatId !== senderId && senderId !== this.currentUserAlias),
                     raw:           envelope
-                });
+                };
+                if (isEphemeralType(localType)) {
+                    // Nunca tocar disco con contenido efímero — ver ephemeral_store.js.
+                    ephemeralStore.add(senderId, incomingMsg);
+                } else {
+                    await this.chats.addMessage(this.storage, senderId, incomingMsg);
+                }
 
                 if ((this.activeChatId !== senderId || document.hidden) && "Notification" in window && Notification.permission === "granted") {
                     try {
@@ -588,13 +620,36 @@ export class SyncManager {
                 }
             } 
             else if (payload.type === "receipt") {
-                const targetId = senderId;
+                const isGroupReceipt = !!payload.group_id;
+                const targetId = isGroupReceipt ? payload.group_id : senderId;
                 const msgId = payload.msg_id;
                 const subtype = payload.subtype;
                 const targetHistory = this.chats.getMessages(targetId);
                 const msg = targetHistory.find(m => m.id === msgId);
                 if (msg) {
-                    if (subtype === "read") {
+                    if (isGroupReceipt) {
+                        // Un solo tick no alcanza para "leído por todos" en un grupo --
+                        // se acumula quién entregó/leyó y recién se sube el status
+                        // agregado cuando el resto de la membresía (todos menos yo) lo
+                        // cubre por completo.
+                        if (!msg.deliveredBy) msg.deliveredBy = [];
+                        if (!msg.readBy) msg.readBy = [];
+                        if (subtype === "delivered" && !msg.deliveredBy.includes(senderId)) {
+                            msg.deliveredBy.push(senderId);
+                        }
+                        if (subtype === "read" && !msg.readBy.includes(senderId)) {
+                            msg.readBy.push(senderId);
+                        }
+                        const grp = this.groups.userGroups.find(g => g.id === targetId);
+                        const others = grp ? grp.members.filter(m => m !== this.currentUserAlias) : [];
+                        const allRead = others.length > 0 && others.every(m => msg.readBy.includes(m));
+                        const allDelivered = others.length > 0 && others.every(m => msg.deliveredBy.includes(m));
+                        if (allRead) {
+                            msg.status = "read";
+                        } else if (allDelivered && msg.status !== "read") {
+                            msg.status = "delivered";
+                        }
+                    } else if (subtype === "read") {
                         msg.status = "read";
                     } else if (subtype === "delivered" && msg.status !== "read") {
                         msg.status = "delivered";
@@ -615,15 +670,17 @@ export class SyncManager {
                 const targetId = payload.group_id || (isGroup ? envelope.receiver_id : senderId);
                 const msgId = payload.msg_id;
                 const viewerId = senderId;
-                
-                const targetHistory = this.chats.getMessages(targetId);
-                const msg = targetHistory.find(m => m.id === msgId);
+
+                const isEphemeral = !!ephemeralStore.find(targetId, msgId);
+                const msg = isEphemeral
+                    ? ephemeralStore.find(targetId, msgId)
+                    : this.chats.getMessages(targetId).find(m => m.id === msgId);
                 if (msg) {
                     if (!msg.viewed_by) msg.viewed_by = [];
                     if (!msg.viewed_by.includes(viewerId)) {
                         msg.viewed_by.push(viewerId);
                     }
-                    
+
                     let shouldDelete = false;
                     if (isGroup) {
                         const group = this.groups.userGroups.find(g => g.id === targetId);
@@ -635,8 +692,11 @@ export class SyncManager {
                     } else {
                         shouldDelete = true;
                     }
-                    
-                    if (shouldDelete) {
+
+                    if (isEphemeral) {
+                        // Solo en memoria — nada que persistir en ningún caso.
+                        if (shouldDelete) ephemeralStore.remove(targetId, msgId);
+                    } else if (shouldDelete) {
                         await this.chats.deleteMessage(this.storage, targetId, msgId);
                     } else {
                         await this.chats.save(this.storage);
@@ -668,6 +728,22 @@ export class SyncManager {
                 await this.contacts.rejectRequest(this.storage, senderId);
                 document.dispatchEvent(new Event("contacts_updated"));
                 if (window._hermesShowToast) window._hermesShowToast(`ℹ️ @${senderId} declinó la solicitud`, false);
+            }
+            else if (payload.type === "resync_request") {
+                // El servidor (blind relay) nunca tuvo el material criptográfico del
+                // contacto — no hay forma de restaurarlo automáticamente. Lo único
+                // honesto es avisar al humano para que reenvíe la invitación a mano.
+                await this.chats.addMessage(this.storage, senderId, {
+                    id: envelope.signature,
+                    sender: 'system',
+                    receiver: envelope.receiver_id,
+                    plaintext: `⚠️ @${senderId} perdió sus datos locales y pide que le reenvíes tu invitación de contacto.`,
+                    timestamp: formatTime(blob.timestamp),
+                    type: 'system',
+                    viewed_by: []
+                });
+                if (window._hermesShowToast) window._hermesShowToast(`⚠️ @${senderId} pide resincronizar el contacto`, false);
+                if (window.renderContactSidebar) window.renderContactSidebar();
             }
             else if (payload.type === "oob_verify") {
                 await this.contacts.setPeerVerifiedMe(this.storage, senderId, true);
@@ -730,15 +806,29 @@ export class SyncManager {
                     viewed_by: []
                 });
             }
-            else if (payload.type === "group_chat" || payload.type === "group_ephemeral_image" || payload.type === "group_ephemeral_audio" || payload.type === "group_ephemeral_text") {
+            else if (payload.type === "group_chat" || payload.type === "group_ephemeral_image" || payload.type === "group_ephemeral_audio" || payload.type === "group_ephemeral_text" || payload.type === "group_ephemeral_image_ptr") {
+                // group_ephemeral_image_ptr: la imagen no viaja en el payload E2E -- solo un
+                // puntero. Se busca+descifra acá y se reescribe payload.text para que el resto
+                // de esta rama (ephemeralStore, notificaciones, recibos) no necesite cambios.
+                let ptrImageId = null;
+                if (payload.type === "group_ephemeral_image_ptr") {
+                    try {
+                        payload.text = await this.fetchGroupEphemeralImage(payload.image_id);
+                    } catch (e) {
+                        console.error("[SyncManager] Error fetching group ephemeral image:", e);
+                        return;
+                    }
+                    ptrImageId = payload.image_id;
+                }
+
                 const isAudio   = payload.msgType === 'audio' || payload.type === "group_ephemeral_audio";
-                const localType = payload.type === "group_ephemeral_image"
+                const localType = payload.type === "group_ephemeral_image" || payload.type === "group_ephemeral_image_ptr"
                     ? "ephemeral_image"
                     : payload.type === "group_ephemeral_audio" ? "ephemeral_audio"
                     : payload.type === "group_ephemeral_text" ? "ephemeral_text"
                     : isAudio ? "audio" : "chat";
 
-                await this.chats.addMessage(this.storage, payload.group_id, {
+                const incomingGroupMsg = {
                     id:            envelope.signature,
                     sender:        senderId,
                     receiver:      payload.group_id,
@@ -750,15 +840,21 @@ export class SyncManager {
                     audioDuration: payload.audioDuration || 0,
                     viewed_by:     [],
                     unread:        (this.activeChatId !== payload.group_id && senderId !== this.currentUserAlias),
+                    image_id:      ptrImageId,
                     raw:           envelope
-                });
+                };
+                if (isEphemeralType(localType)) {
+                    ephemeralStore.add(payload.group_id, incomingGroupMsg);
+                } else {
+                    await this.chats.addMessage(this.storage, payload.group_id, incomingGroupMsg);
+                }
 
                 if (senderId !== this.currentUserAlias && (this.activeChatId !== payload.group_id || document.hidden) && "Notification" in window && Notification.permission === "granted") {
                     try {
                         let groupName = payload.group_id;
                         const grp = this.groups.userGroups.find(g => g.id === payload.group_id);
                         if (grp) groupName = grp.name;
-                        
+
                         const title = `Mensaje de @${senderId} en #${groupName}`;
                         const body = localType === 'ephemeral_image' ? '📷 Foto efímera' :
                                      localType === 'ephemeral_audio' ? '🎵 Audio efímero' :
@@ -767,6 +863,33 @@ export class SyncManager {
                                      (payload.text.substring(0, 40) + (payload.text.length > 40 ? '...' : ''));
                         new Notification(title, { body });
                     } catch (e) {}
+                }
+
+                // Recibos de entrega/lectura para mensajes de grupo -- antes nunca se
+                // enviaban y el status quedaba pegado en "sent" para siempre (ver
+                // BACKLOG.md #10). Van directo al remitente original, no a todo el grupo;
+                // él agrega deliveredBy/readBy contra la membresía real (rama "receipt"
+                // más abajo).
+                if (senderId !== this.currentUserAlias) {
+                    try {
+                        await this.sendBlob(this.currentUserAlias, senderId, {
+                            type: "receipt",
+                            subtype: "delivered",
+                            msg_id: envelope.signature,
+                            group_id: payload.group_id
+                        });
+
+                        if (this.activeChatId === payload.group_id && window.state?.privacySettings?.readReceipts !== false && !window.disableReadReceipts) {
+                            await this.sendBlob(this.currentUserAlias, senderId, {
+                                type: "receipt",
+                                subtype: "read",
+                                msg_id: envelope.signature,
+                                group_id: payload.group_id
+                            });
+                        }
+                    } catch (e) {
+                        console.error("[SyncManager] Error sending group receipts:", e);
+                    }
                 }
             }
             else if (payload.type === "group_rename") {
@@ -825,6 +948,28 @@ export class SyncManager {
                         type: 'system',
                         viewed_by: []
                     });
+
+                    // Auto-rekey: si alguien se fue del grupo por su cuenta (nadie más lo
+                    // notifica), el admin es quien rota y redistribuye la clave simétrica a
+                    // los miembros restantes -- sin esto, quien se fue conserva acceso a los
+                    // mensajes futuros del grupo (ver BACKLOG.md #4). El caso de expulsión
+                    // (group_remove_member) ya rota la clave del lado de quien expulsa.
+                    if (payload.type === "group_member_leave") {
+                        const grp = this.groups.userGroups.find(g => g.id === payload.group_id);
+                        if (grp && grp.creator_id === this.currentUserAlias) {
+                            const newKeyBytes = crypto.getRandomValues(new Uint8Array(32));
+                            const newKeyHex = Array.from(newKeyBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+                            await this.groups.rotateGroupKey(this.storage, payload.group_id, newKeyHex);
+                            for (const memberId of grp.members) {
+                                if (memberId === this.currentUserAlias) continue;
+                                this.sendBlob(this.currentUserAlias, memberId, {
+                                    type: "group_rekey",
+                                    group_id: payload.group_id,
+                                    new_symmetric_key: newKeyHex
+                                }).catch(() => {});
+                            }
+                        }
+                    }
                 }
             }
         } catch (e) {
@@ -961,7 +1106,7 @@ export class SyncManager {
         let resJson = null;
         try {
             const headers = { "Content-Type": "application/json" };
-            const token = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+            const token = sessionStorage.getItem('hermes_session_token');
             if (token) {
                 headers["Authorization"] = `Bearer ${token}`;
             }
@@ -1015,6 +1160,75 @@ export class SyncManager {
             envelope: envelope,
             is_pending: resJson.blob_id.startsWith("pending_")
         };
+    }
+
+    // Custodia temporal server-side de imágenes efímeras de GRUPO (EphemeralImageStore
+    // / ImageEncryptor, ver BACKLOG.md) -- excepción consciente y acotada al modelo
+    // zero-knowledge general, solo para este caso. El descifrado en sí siempre pasa
+    // por WASM (hermesBridge), nunca crypto.subtle directo, por AGENTS.md.
+    async uploadGroupEphemeralImage(groupId, memberAliases, imageDataUrl) {
+        const userHash = await sha256(this.currentUserAlias);
+        // El servidor identifica a los viewers por hash (mismo user_hash que se manda
+        // en el fetch/viewed), no por alias -- si no, get_image() nunca reconoce al
+        // requester como viewer autorizado.
+        const memberHashes = await Promise.all(memberAliases.map(alias => sha256(alias)));
+        const headers = { "Content-Type": "application/json" };
+        const token = sessionStorage.getItem('hermes_session_token');
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
+        const res = await fetch('/api/media/group-ephemeral-image', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+                user_hash: userHash,
+                group_id: groupId,
+                member_ids: memberHashes,
+                image_data_b64: imageDataUrl
+            })
+        });
+        if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}));
+            throw new Error("Failed to upload group ephemeral image: " + (errJson.detail || res.statusText));
+        }
+        const data = await res.json();
+        return data.image_id;
+    }
+
+    async fetchGroupEphemeralImage(imageId) {
+        const userHash = await sha256(this.currentUserAlias);
+        const headers = { "Content-Type": "application/json" };
+        const token = sessionStorage.getItem('hermes_session_token');
+        if (token) headers["Authorization"] = `Bearer ${token}`;
+
+        const res = await fetch('/api/media/group-ephemeral-image/fetch', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ user_hash: userHash, image_id: imageId })
+        });
+        if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}));
+            throw new Error("Failed to fetch group ephemeral image: " + (errJson.detail || res.statusText));
+        }
+        const { ciphertext_hex, nonce_hex, key_hex } = await res.json();
+        const plaintextBytes = hermesBridge.decryptGroupEphemeralImage(key_hex, nonce_hex, ciphertext_hex);
+        return new TextDecoder().decode(new Uint8Array(plaintextBytes));
+    }
+
+    async markGroupEphemeralImageViewed(imageId) {
+        try {
+            const userHash = await sha256(this.currentUserAlias);
+            const headers = { "Content-Type": "application/json" };
+            const token = sessionStorage.getItem('hermes_session_token');
+            if (token) headers["Authorization"] = `Bearer ${token}`;
+
+            await fetch('/api/media/group-ephemeral-image/viewed', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ user_hash: userHash, image_id: imageId })
+            });
+        } catch (e) {
+            console.warn('[SyncManager] Error marking group ephemeral image viewed:', e);
+        }
     }
 
     async sendGroupBlob(senderId, groupId, payloadObj) {

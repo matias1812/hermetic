@@ -1,13 +1,11 @@
 // frontend/src/js/recovery/reconciliation_manager.js
 import { state, sha256 } from '../state.js';
-import { hermesStore } from '../store/hermes_store.js';
 import { modalManager } from '../ui/modal_manager.js';
-import { RecoveryKeyDerivation } from '../recovery_key_derivation.js';
 import { recoverySystem } from '../recovery_system_complete.js';
 
 
 function getSessionToken() {
-    return sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+    return sessionStorage.getItem('hermes_session_token');
 }
 
 function getCurrentUserId() {
@@ -67,12 +65,12 @@ export class ReconciliationManager {
     
     async loadLocalState() {
         return {
-            contacts: hermesStore?.state?.contacts || state.contacts?.contacts || [],
-            groups: hermesStore?.state?.groups || state.groups?.userGroups || [],
-            keys: hermesStore?.state?.keys || state.userKeys || {},
+            contacts: state.contacts?.contacts || [],
+            groups: state.groups?.userGroups || [],
+            keys: state.userKeys || {},
             hasBackup: Boolean(state.backup),
-            hasRecoveryKey: localStorage.getItem('hermes_recovery_phrase') !== null,
-            lastBackupDate: localStorage.getItem('hermes_last_auto_backup')
+            hasRecoveryKey: localStorage.getItem('hermes_recovery_phrase_' + getCurrentUserId()) !== null,
+            lastBackupDate: localStorage.getItem('hermes_last_auto_backup_' + getCurrentUserId())
         };
     }
 
@@ -110,7 +108,7 @@ export class ReconciliationManager {
         
         if (!this.serverState) return discrepancies;
         
-        const localContactIds = new Set((this.localState.contacts || []).map(c => c.id));
+        const localContactIds = new Set(this.localState.contacts || []);
         for (const serverContact of (this.serverState.contacts || [])) {
             if (!localContactIds.has(serverContact.userId)) {
                 discrepancies.contactsMissingLocally.push(serverContact);
@@ -216,14 +214,16 @@ export class ReconciliationManager {
         if (!phrase) return;
         try {
             const userHash = await getCurrentUserHash();
-            const recoveryKey = await RecoveryKeyDerivation.deriveKeyFromMnemonic(phrase, userHash);
-
-            const blobId = localStorage.getItem('hermes_recovery_blob_id') || 'latest';
-            const blob = await recoverySystem.downloadBlob(blobId);
-            const restoredState = await recoverySystem.decryptState(blob, recoveryKey);
-            await this.applyRestoredState(restoredState);
-            modalManager.alert('[ RECONCILIACIÓN EXITOSA ]', `Se recuperaron ${restoredState.contacts?.length || 0} contactos y ${restoredState.groups?.length || 0} grupos.`);
+            // recoverySystem.restore() ya descarga el backup más reciente, descifra,
+            // resuelve conflictos contra el estado local y persiste el resultado
+            // (contacts/groups/groupKeys/settings/keys) — no hay un decryptState()
+            // ni un recoveryKey crudo que manejar acá aparte.
+            const resolved = await recoverySystem.restore(phrase.trim(), userHash);
+            const contactCount = resolved.state?.contacts?.length || 0;
+            const groupCount = resolved.state?.groups?.length || 0;
+            modalManager.alert('[ RECONCILIACIÓN EXITOSA ]', `Se recuperaron ${contactCount} contactos y ${groupCount} grupos.`);
         } catch (error) {
+            console.error('[Reconciliation] Error restaurando con recovery key:', error);
             modalManager.alert('[ ERROR ]', 'No se pudo restaurar el estado. Verifica tus palabras clave.');
         }
     }
@@ -277,7 +277,13 @@ export class ReconciliationManager {
             if (token) {
                 await fetch('/api/user/purge', { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } });
             }
-            await hermesStore.clearAll();
+            state.contacts.contacts = [];
+            state.contacts.contactData = [];
+            state.contacts.sharedKeys = {};
+            state.contacts.blockedContacts = [];
+            await state.contacts.save(state.storage);
+            state.groups.userGroups = [];
+            await state.groups.save(state.storage);
             modalManager.alert('[ REINICIANDO ]', 'Estado del servidor purgado. Empezando de cero limpia y herméticamente.');
             setTimeout(() => window.location.reload(), 1500);
         } catch (e) {
@@ -286,11 +292,27 @@ export class ReconciliationManager {
     }
     
     async applyRestoredState(restoredState) {
+        // El servidor solo confirma que la relación existió (userId/id), nunca el
+        // material criptográfico (blind relay) — se restaura como "aceptado" sin
+        // shared_key; el canal real se re-establece en el siguiente handshake.
         if (restoredState.contacts) {
-            for (const c of restoredState.contacts) hermesStore.dispatch('CONTACT_ADDED', c);
+            for (const c of restoredState.contacts) {
+                const contactId = c.userId || c.id || c;
+                if (!state.contacts.contacts.includes(contactId)) {
+                    state.contacts.contacts.push(contactId);
+                }
+                state.contacts.contactData = state.contacts.contactData.filter(cd => cd.contact_id !== contactId);
+                state.contacts.contactData.push({ contact_id: contactId, status: 'accepted', shared_key: null });
+            }
+            await state.contacts.save(state.storage);
         }
         if (restoredState.groups) {
-            for (const g of restoredState.groups) hermesStore.dispatch('GROUP_CREATED', g);
+            for (const g of restoredState.groups) {
+                if (!state.groups.userGroups.some(ug => ug.id === g.id)) {
+                    state.groups.userGroups.push(g);
+                }
+            }
+            await state.groups.save(state.storage);
         }
     }
 }

@@ -40,7 +40,6 @@ import { hermesTour } from './js/onboarding_tour.js';
 import './js/group_crypto.js';
 import './js/privacy_settings.js';
 import './js/ui/theme_manager.js';
-import './js/ephemeral_audio.js';
 import { finalEvaluation } from './js/final_evaluation.js';
 import { chatSelector } from './js/chat_selector.js';
 import { verifier } from './js/messaging_tests.js';
@@ -48,7 +47,6 @@ import './js/crypto_wasm_bridge.js';
 import './js/timing_verifier.js';
 import './js/double_ratchet.js';
 import './js/audio_engine_pro.js';
-import './js/admin_pro.js';
 import './js/i18n.js';
 import { verifierSuite } from './js/verification_suite.js';
 import { appInitializer } from './js/app_initializer.js';
@@ -308,10 +306,14 @@ function initApp() {
 
     // Start Paranoid Security Monitor
     // Only run automated evaluation suite if requested via query param or console
-    window.runHermesTests = () => {
-        finalEvaluation.evaluate();
-        verifier.runAllTests();
-        verifierSuite.runAll();
+    window.runHermesTests = async () => {
+        // finalEvaluation.evaluate() ya corre verifierSuite.runAll() internamente para
+        // armar el puntaje final -- llamarlo de nuevo acá duplicaba la ejecución (dos
+        // corridas concurrentes, sin await, pisándose sobre el mismo estado mutable de
+        // state.groups/state.chats) y producía fallos falsos y no determinísticos en tests
+        // que pasan limpio en aislamiento (ej. testGroupsFlow).
+        await finalEvaluation.evaluate();
+        await verifier.runAllTests();
     };
     if (window.location.search.includes('run_tests=true')) {
         setTimeout(() => window.runHermesTests(), 500);
@@ -389,7 +391,12 @@ if (document.readyState === "loading") {
 
 function setupMultiTabSynchronization() {
     window.addEventListener('storage', (e) => {
-        if (e.key === 'logout_all_signal') {
+        if (!e.key || !e.key.startsWith('logout_all_signal_')) return;
+        const targetHash = e.key.slice('logout_all_signal_'.length);
+        const myHash = state.storage.getUserId();
+        // Solo desloguea esta pestaña si la señal es de la MISMA cuenta —
+        // dos pestañas con cuentas distintas no deben interferir entre sí.
+        if (myHash && targetHash === myHash) {
             executeWipeLogout();
         }
     });

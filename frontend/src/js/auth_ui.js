@@ -4,9 +4,9 @@ import { modalManager } from './ui/modal_manager.js';
 import { SyncManager } from './sync_manager.js';
 import { BackupManager } from './backup_manager.js';
 import { renderContactSidebar, renderGroupSidebar, setupChatEventListeners, renderMessages } from './chat_ui.js';
-import { loadBackupsList, startBackupReminder, setupBackupRestoreListeners } from './backup_ui.js';
+import { loadBackupsList, startBackupReminder } from './backup_ui.js';
 import { recoverySystem } from './recovery_system_complete.js';
-import { persistenceManager } from './persistence_manager.js';
+import { hermesStore } from './store/hermes_store.js';
 import { MemorySanitizer } from './memory_sanitizer.js';
 
 
@@ -199,80 +199,49 @@ export async function triggerLoginRestore(prefilledAlias = null) {
     if (!source) return;
 
     if (source.toLowerCase().trim() === 'nube') {
+        // Caso "perdí el dispositivo": no hay sesión ni contraseña anterior que
+        // valga (la contraseña del vault nunca sale de este dispositivo, así
+        // que perderlo la pierde con él). Lo único que autentica esto ante el
+        // servidor son las 12 palabras, vía /api/recovery/fetch (proof-based,
+        // sin sesión) — ver recoverySystem.restorePreAuth().
         const idHash = await sha256(alias);
         try {
-            showToast("Buscando backups en la nube...", false);
-            const res = await fetch("/api/backup/fetch", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_hash: idHash,
-                    timestamp: Math.floor(Date.now() / 1000),
-                    signature: "not_required"
-                })
-            });
-            if (!res.ok) throw new Error("No se pudo conectar a la nube.");
-            const data = await res.json();
-            if (!data.backups || data.backups.length === 0) {
-                showToast("❌ No se encontraron backups en la nube para este alias.", true);
+            const phrase = await modalManager.prompt(
+                '[ FRASE DE RECUPERACIÓN ]',
+                `Ingresa las 12 palabras de recuperación de la cuenta @${alias}:`
+            );
+            if (!phrase) return;
+
+            showToast("Verificando frase de recuperación en el servidor...", false);
+            const remoteState = await recoverySystem.restorePreAuth(phrase, idHash);
+
+            const newPassword = await modalManager.prompt(
+                '[ NUEVA CONTRASEÑA LOCAL ]',
+                'Frase válida. Define una nueva contraseña para desbloquear esta cuenta en este dispositivo:'
+            );
+            if (!newPassword) {
+                showToast("Restauración cancelada: se requiere una contraseña local nueva.", true);
                 return;
             }
 
-            const latestBackup = data.backups[data.backups.length - 1]; // Obtener el más reciente
-            
-            const password = await modalManager.prompt('[ DESCIFRAR RESPALDO ]', `Se encontró un backup. Ingresa la contraseña del respaldo para la cuenta @${alias}:`);
-            if (!password) return;
-
-            showToast("Restaurando respaldo...", false);
+            showToast("Restaurando cuenta...", false);
             state.storage.setUserId(idHash);
             localStorage.setItem("hermes_alias_" + idHash, alias);
             localStorage.setItem("hermes_alias_legacy", alias);
 
-            const unlocked = await state.storage.unlock(password);
+            const unlocked = await state.storage.unlock(newPassword);
             if (!unlocked) {
                 showToast("Error al inicializar almacenamiento local", true);
                 return;
             }
 
-            const backupMgr = new BackupManager(state.storage, state.mediaStorage);
-            if (state.mediaStorage && !state.mediaStorage.db) {
-                try { await state.mediaStorage.open(); } catch(err) {}
+            await recoverySystem.applyState(remoteState);
+            if (remoteState.keys) {
+                state.userKeys = remoteState.keys;
             }
 
-            // Descifrar desde Hex (la nube devuelve Hex)
-            const buffer = new Uint8Array(latestBackup.encrypted_data.match(/.{1,2}/g).map(byte => parseInt(byte, 16))).buffer;
-
-            const decryptedData = await backupMgr.decryptBackup(buffer, password);
-            const calculatedChecksum = await backupMgr.calculateChecksum(decryptedData);
-            if (calculatedChecksum !== decryptedData.checksum) {
-                throw new Error('Backup corrupto o manipulado');
-            }
-
-            // Restaurar datos de texto
-            await state.storage.save('hermes_contacts',     decryptedData.contacts        || []);
-            await state.storage.save('hermes_contact_data', decryptedData.contactData     || []);
-            await state.storage.save('hermes_shared_keys',  decryptedData.sharedKeys      || {});
-            await state.storage.save('hermes_groups',       decryptedData.groups          || []);
-            await state.storage.save('hermes_messages',     decryptedData.messageHistory  || {});
-            await state.storage.save('hermes_settings',     decryptedData.settings        || {});
-            await state.storage.save('hermes_keys',         decryptedData.userKeys        || {});
-            
-            // Restaurar imágenes permanentes y audio si existen
-            if (state.mediaStorage) {
-                if (decryptedData.images) {
-                    for (const id in decryptedData.images) {
-                        await state.mediaStorage.storePermanentImage(id, decryptedData.images[id]);
-                    }
-                }
-                if (decryptedData.audio) {
-                    for (const id in decryptedData.audio) {
-                        await state.mediaStorage.storeAudio(id, decryptedData.audio[id]);
-                    }
-                }
-            }
-
-            showToast("✅ Respaldo restaurado con éxito desde la NUBE. Iniciando sesión...");
-            await doLoginTransition(alias, password);
+            showToast("✅ Cuenta restaurada con éxito desde la frase de recuperación. Iniciando sesión...");
+            await doLoginTransition(alias, newPassword);
 
         } catch (err) {
             console.error("[LoginRestore] Error:", err);
@@ -367,25 +336,28 @@ export async function doLoginTransition(alias, password) {
             Notification.requestPermission();
         }
 
-        // Merge from IndexedDB if localStorage was empty or F5 refreshed
+        // Hidratar el outbox (namespaced por usuario) ahora que setUserId ya corrió.
         try {
-            await persistenceManager.initialize();
-            const idbContacts = await persistenceManager.loadAllContacts();
-            if (idbContacts && idbContacts.length > 0 && state.contacts.contacts.length === 0) {
-                state.contacts.contacts = idbContacts.map(c => c.id || c);
-            }
-            const idbGroups = await persistenceManager.loadAllGroups();
-            if (idbGroups && idbGroups.length > 0 && state.groups.userGroups.length === 0) {
-                state.groups.userGroups = idbGroups;
-            }
-        } catch (idbErr) {
-            console.warn("[Auth] IndexedDB check in transition:", idbErr);
+            await hermesStore.initialize();
+        } catch (storeErr) {
+            console.warn("[Auth] HermesStore init in transition:", storeErr);
         }
 
         if (state.currentUser) {
+            // OJO: solo persistir si el filtro realmente sacó algo. Guardar
+            // incondicionalmente en cada login es lo que causaba pérdida real de
+            // contactos — si state.contacts.load() arriba devolvió [] por cualquier
+            // hiccup silencioso de lectura/descifrado (storage_manager.js traga esos
+            // errores y devuelve null en vez de propagarlos), este bloque terminaba
+            // reescribiendo el array vacío sobre datos buenos en disco, sin ningún
+            // error visible en ningún lado.
+            const beforeContacts = state.contacts.contacts.length;
+            const beforeData = state.contacts.contactData.length;
             state.contacts.contacts = state.contacts.contacts.filter(c => c !== state.currentUser);
             state.contacts.contactData = state.contacts.contactData.filter(c => c.contact_id !== state.currentUser);
-            await state.contacts.save(state.storage);
+            if (state.contacts.contacts.length !== beforeContacts || state.contacts.contactData.length !== beforeData) {
+                await state.contacts.save(state.storage);
+            }
         }
 
         recoverySystem.startAutoBackup();
@@ -427,10 +399,27 @@ export async function doLoginTransition(alias, password) {
             }
             return;
         }
-        console.warn("[Auth] Aviso al cargar bases locales (re-inicializando sesión segura):", e.message);
-        state.contacts.contacts = [];
-        state.groups.userGroups = [];
-        state.userKeys = null;
+        // NUNCA continuar el login tras un error inesperado acá: seguir de largo dejaba
+        // el usuario entrar con contacts/groups/keys reseteados en memoria, y cualquier
+        // save() posterior (auto-add de contacto, reconciliación, etc.) persistía ese
+        // vacío al disco — pérdida de cuenta real por un error transitorio. Mejor abortar
+        // el login y no tocar nada en disco; el usuario puede reintentar.
+        console.error("[Auth] Error inesperado cargando datos locales — abortando login sin modificar nada:", e);
+        // El error puede haber ocurrido después de la transición a view-chat (p.ej. un
+        // import() dinámico que falla) — hay que revertirla explícitamente, si no el
+        // usuario queda viendo el chat vacío en vez de volver a la pantalla de login.
+        document.getElementById('view-chat')?.classList.add('hidden');
+        document.getElementById('view-auth')?.classList.remove('hidden');
+        document.getElementById('login-view').classList.add('hidden');
+        document.getElementById('account-select-view').classList.remove('hidden');
+        if (window.modalManager) {
+            await window.modalManager.alert(
+                '[ ERROR AL INICIAR SESIÓN ]',
+                'Ocurrió un error inesperado cargando tus datos locales. Por seguridad no se modificó nada. Intenta iniciar sesión de nuevo.',
+                'error'
+            );
+        }
+        return;
     }
 
 
@@ -444,9 +433,6 @@ export async function doLoginTransition(alias, password) {
     // Initialize IndexedDB for multimedia (images + audio)
     try {
         await state.mediaStorage.open();
-        // Inyectar la clave derivada para cifrado de IndexedDB
-        const cryptoKey = state.storage.getKey ? state.storage.getKey() : null;
-        if (cryptoKey) state.mediaStorage.setKey(cryptoKey);
         // Limpiar efímeras expiradas de sesiones anteriores
         const cleaned = await state.mediaStorage.cleanupEphemeral();
         if (cleaned > 0) console.log(`[MediaStorage] Limpiadas ${cleaned} imágenes efímeras expiradas.`);
@@ -528,8 +514,11 @@ export async function doLoginTransition(alias, password) {
     await state.sync.start(wsUrl);
 
     setupChatEventListeners();
-    setupBackupRestoreListeners();
-    setupSettingsDropdown();
+    // setupBackupRestoreListeners/setupRecoveryUI/setupSettingsDropdown ya se registran una
+    // única vez al boot en main.js:initApp() (corren antes que cualquier login sea posible);
+    // volver a llamarlos acá duplicaba los addEventListener de esos botones (doble mnemónico
+    // generado por click en "Generar Llave Maestra", doble backup subido por click en
+    // "Crear Backup", etc.) — ver BACKLOG.md.
     renderContactSidebar();
     renderGroupSidebar();
     loadBackupsList();
@@ -572,7 +561,7 @@ export async function executeWipeLogout() {
     // Revocar el token de sesión en el servidor — sin esto queda válido hasta su
     // expiración natural (8h) aunque el usuario haya cerrado sesión explícitamente.
     try {
-        const sessionToken = sessionStorage.getItem('hermes_session_token') || localStorage.getItem('hermes_session_token');
+        const sessionToken = sessionStorage.getItem('hermes_session_token');
         if (sessionToken) {
             await fetch("/api/logout", {
                 method: "POST",
@@ -580,7 +569,6 @@ export async function executeWipeLogout() {
             });
         }
         sessionStorage.removeItem('hermes_session_token');
-        localStorage.removeItem('hermes_session_token');
     } catch (e) {
         console.warn("[Auth] No se pudo revocar el token de sesión al salir:", e);
     }
@@ -823,7 +811,7 @@ export function setupSettingsDropdown() {
             const mkBtnText = document.getElementById('mk-btn-text');
             const btnConfigMK = document.getElementById('btn-configure-mk');
             const currentUserId = state.storage ? state.storage.getUserId() : '';
-            const hasMK = localStorage.getItem('hermes_master_key_set') === 'true' || localStorage.getItem('hermes_recovery_salt_' + currentUserId) || localStorage.getItem('hermes_recovery_salt');
+            const hasMK = localStorage.getItem('hermes_master_key_set_' + currentUserId) === 'true' || localStorage.getItem('hermes_recovery_salt_' + currentUserId) || localStorage.getItem('hermes_recovery_salt');
             if (mkBadge) {
                 if (hasMK) {
                     mkBadge.textContent = 'ACTIVA';
@@ -994,7 +982,10 @@ export function setupSettingsDropdown() {
                 if (window.closeSettingsModal) window.closeSettingsModal();
                 const confirmed = await modalManager.confirm('[ CERRAR TODAS LAS SESIONES ]', '¿Cerrar sesión en todas las pestañas y dispositivos?');
                 if (confirmed) {
-                    localStorage.setItem("logout_all_signal", Date.now());
+                    const myHash = state.storage.getUserId();
+                    if (myHash) {
+                        localStorage.setItem("logout_all_signal_" + myHash, Date.now());
+                    }
                     executeWipeLogout();
                 }
             });
@@ -1153,24 +1144,60 @@ export function setupAuthEventListeners() {
 
                 if (regRes.ok) {
                     showToast("Registro exitoso");
-                    
+
                     // Guardar llaves en almacenamiento local PRIMERO y FUERA del try-catch
                     // para garantizar que nunca se pierdan si algo falla en el backup/recovery
                     await state.storage.save('hermes_keys', state.userKeys);
 
-                    // Inicializar el Sistema de Recuperación Nivel Dios
+                    // recoverySystem.initialize()/backup.createBackup() abajo llaman a
+                    // /api/recovery/register-proof y /api/backup, ambos con sesión
+                    // requerida (Depends(verify_session_token)) — pero la sesión real
+                    // recién se abre en doLoginTransition(), MÁS ABAJO. Sin este bootstrap
+                    // temprano ambas llamadas 401 en silencio (dentro de su propio
+                    // try/catch) y el usuario nunca se entera de que no quedó nada
+                    // respaldado. Se pide un token ahora mismo con las llaves recién
+                    // generadas; doLoginTransition() vuelve a pedirlo después, pero
+                    // _ensureRegistered() es idempotente.
+                    try {
+                        const earlySync = new SyncManager(alias.toLowerCase(), state.storage, state.contacts, state.groups, state.chats, () => {});
+                        await earlySync._ensureRegistered();
+                    } catch (e) {
+                        console.warn("[Auth] No se pudo abrir sesión temprano para el backup de registro:", e);
+                    }
+
+                    // Frase de recuperación: OBLIGATORIA. Si esto falla (mnemonic, marcador
+                    // local, o registro del proof en el servidor), la frase que se le
+                    // mostraría al usuario sería inútil para recuperar la cuenta más
+                    // adelante — así que se bloquea el registro en vez de continuar
+                    // silenciosamente (la cuenta ya existe en el servidor; el usuario puede
+                    // reintentar iniciando sesión, ver triggerLoginRestore).
                     try {
                         await recoverySystem.initialize(idHash);
-                        localStorage.setItem('hermes_master_key_set', 'true');
-                        
-                        // Generar y descargar el primer backup local completo con todas las claves
+                        localStorage.setItem('hermes_master_key_set_' + idHash, 'true');
+                    } catch (e) {
+                        console.error("Error inicializando el sistema de recuperación:", e);
+                        document.getElementById('view-chat')?.classList.add('hidden');
+                        document.getElementById('view-auth')?.classList.remove('hidden');
+                        if (window.modalManager) {
+                            await window.modalManager.alert(
+                                '[ ERROR EN EL RESPALDO OBLIGATORIO ]',
+                                'Tu cuenta se creó en el servidor, pero no se pudo configurar la frase de recuperación (' + (e.message || 'error desconocido') + '). Sin esto no podrías recuperar la cuenta si pierdes este dispositivo. Inicia sesión para reintentarlo.',
+                                'error'
+                            );
+                        }
+                        btnRegister.disabled = false;
+                        btnRegister.textContent = originalText;
+                        return;
+                    }
+
+                    // Generar y descargar el primer backup local completo con todas las claves
+                    try {
                         showToast("Generando primer backup local (con llaves)...", false);
-                        // Aseguramos que los managers de la sesión estén al menos listos
                         state.backup = new BackupManager(state.storage, state.mediaStorage);
                         await state.backup.createBackup(password);
                         showToast("Backup inicial generado exitosamente.", "success");
                     } catch (e) {
-                        console.error("Error inicializando Recovery System o Backup:", e);
+                        console.error("Error generando el backup inicial:", e);
                     }
                 } else {
                     const err = await regRes.json();

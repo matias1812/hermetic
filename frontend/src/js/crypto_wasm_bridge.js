@@ -378,22 +378,36 @@ export class RealHermesCrypto {
 
     async deriveRecoveryKey(mnemonic, userIdHash) {
         this._assertReady('deriveRecoveryKey');
-        const keyArray = this.rustCrypto.derive_recovery_key(mnemonic);
+        // userIdHash entra al salt (ver core_api.rs) — antes se descartaba acá y
+        // la misma frase derivaba la misma clave para cualquier cuenta del sistema.
+        const keyArray = this.rustCrypto.derive_recovery_key(mnemonic, userIdHash);
         return keyArray.buffer.slice(keyArray.byteOffset, keyArray.byteOffset + keyArray.byteLength);
     }
 
-    async encryptWithRecoveryKey(mnemonic, data) {
+    async encryptWithRecoveryKey(mnemonic, userIdHash, data) {
         this._assertReady('encryptWithRecoveryKey');
         const dataArray = new Uint8Array(data);
-        const ciphertextArray = this.rustCrypto.encrypt_with_recovery_key(mnemonic, dataArray);
+        const ciphertextArray = this.rustCrypto.encrypt_with_recovery_key(mnemonic, userIdHash, dataArray);
         return ciphertextArray.buffer.slice(ciphertextArray.byteOffset, ciphertextArray.byteOffset + ciphertextArray.byteLength);
     }
 
-    async decryptWithRecoveryKey(mnemonic, ciphertext) {
+    async decryptWithRecoveryKey(mnemonic, userIdHash, ciphertext) {
         this._assertReady('decryptWithRecoveryKey');
         const ciphertextArray = new Uint8Array(ciphertext);
-        const plaintextArray = this.rustCrypto.decrypt_with_recovery_key(mnemonic, ciphertextArray);
+        const plaintextArray = this.rustCrypto.decrypt_with_recovery_key(mnemonic, userIdHash, ciphertextArray);
         return plaintextArray.buffer.slice(plaintextArray.byteOffset, plaintextArray.byteOffset + plaintextArray.byteLength);
+    }
+
+    async deriveRecoveryProof(mnemonic, userIdHash) {
+        // Seguro de mandarle al servidor: HKDF con `info` distinto al de la
+        // clave de cifrado del backup (ver core_api.rs) — no revela esa clave.
+        this._assertReady('deriveRecoveryProof');
+        const proofArray = this.rustCrypto.derive_recovery_proof(mnemonic, userIdHash);
+        return this._bytesToHex(proofArray);
+    }
+
+    _bytesToHex(bytes) {
+        return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
     }
     
     // Group Crypto Stubs (FAIL-CLOSED)
@@ -434,6 +448,13 @@ export class RealHermesCrypto {
     decryptMedia(ciphertextBytes, rawKeyBytes, ivBytes) {
         this._assertReady('decryptMedia');
         throw new Error("NotImplemented: Media decryption pending Rust implementation");
+    }
+
+    // Descifra una imagen efímera de grupo recuperada del endpoint de custodia
+    // temporal del servidor (EphemeralImageStore) — ver BACKLOG.md.
+    decryptGroupEphemeralImage(keyHex, nonceHex, ciphertextHex) {
+        this._assertReady('decryptGroupEphemeralImage');
+        return this.rustCrypto.decrypt_group_ephemeral_image(keyHex, nonceHex, ciphertextHex);
     }
 
     runSelfTests() {

@@ -5,7 +5,6 @@ import { LocalGroupManager } from './group_manager.js';
 import { LocalChatManager } from './chat_manager.js';
 import { BackupManager } from './backup_manager.js';
 import { MediaStorage } from './media_storage.js';
-import { RecoveryKeyManager } from './recovery_key_manager.js';
 import { ToastManager } from './ui/toast_manager.js';
 // NOTE: ScreenshotDetector is NOT imported here to avoid circular dependency.
 // It is lazy-imported in auth_ui.js after login via dynamic import().
@@ -31,10 +30,6 @@ export const state = {
     // Multimedia
     mediaStorage: new MediaStorage(),
     screenshotDetector: null,   // inicializado tras login
-
-    // Recovery Key Manager
-    recoveryKeyManager: RecoveryKeyManager,  // Módulo estático BIP39
-    recoveryKey: null,          // CryptoKey derivada de la mnemónica (durante la sesión)
 };
 
 let lastTs = 0;

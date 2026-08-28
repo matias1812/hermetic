@@ -51,7 +51,6 @@
       "implemented_by": [
         "hermes_backend/crypto_core/kyber_manager.py::KyberManager::derive_aes_key",
         "hermes_backend/crypto_core/hybrid_encryptor.py::HybridPQCEncryptor::encrypt",
-        "hermes_backend/network_core/websocket_handler.py::_zeroize",
         "hermes_backend/network_core/ephemeral_store.py::_zeroize"
       ],
       "tested_by": [

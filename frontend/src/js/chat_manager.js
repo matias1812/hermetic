@@ -1,4 +1,5 @@
 // chat_manager.js
+import { ephemeralStore } from './ephemeral_store.js';
 
 export class LocalChatManager {
     constructor() {
@@ -15,12 +16,18 @@ export class LocalChatManager {
     }
 
     getMessages(targetId) {
-        return this.history[targetId] || [];
+        const persisted = this.history[targetId] || [];
+        const ephemeral = ephemeralStore.get(targetId);
+        if (ephemeral.length === 0) return persisted;
+        // Los efímeros nunca se persisten (ver ephemeral_store.js) — se
+        // mezclan acá para que toda la UI siga leyendo de un solo lugar.
+        return [...persisted, ...ephemeral].sort((a, b) => (a.timestamp_ms || 0) - (b.timestamp_ms || 0));
     }
 
     getUnreadCount(targetId) {
         const msgs = this.history[targetId] || [];
-        return msgs.filter(m => m.unread === true).length;
+        const ephemeralUnread = ephemeralStore.get(targetId).filter(m => m.unread === true).length;
+        return msgs.filter(m => m.unread === true).length + ephemeralUnread;
     }
 
     async markAllAsRead(storage, targetId) {
