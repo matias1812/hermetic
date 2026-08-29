@@ -138,17 +138,32 @@ class Phase7Auditor:
                 forbidden = ['messages', 'contacts', 'groups', 'message_logs', 'user_metadata', 'chat_history']
                 found_forbidden = [t for t in forbidden if t in tables]
                 
-                # Check for sensitive columns in schemas
-                cursor.execute("SELECT sql FROM sqlite_master WHERE type='table';")
-                schemas = [r[0] for r in cursor.fetchall() if r[0]]
-                
+                # Check for sensitive columns. FALSO POSITIVO encontrado y arreglado acá:
+                # la versión anterior hacía `keyword in schema_lower` contra el DDL crudo
+                # completo (incluye tipos SQL, no solo nombres de columna) -- eso hace
+                # match de 'text' contra el tipo de columna "TEXT" de CUALQUIER columna
+                # (p.ej. "public_key_mlkem TEXT NOT NULL"), y de 'ip' como substring
+                # dentro de nombres legítimos que no tienen nada que ver, como
+                # "relationship_type" (termina en "...ship", que contiene "ip"). Confirmado
+                # reproduciendo: `pytest tests/phase7_audit.py` fallaba 9/10 contra un
+                # esquema que la propia auditoría de anonimato del proyecto confirma limpio
+                # (sin columnas de IP/metadata reales). Fix: comparar por TOKEN de nombre de
+                # columna real (vía PRAGMA table_info, no el string de CREATE TABLE), no por
+                # substring del DDL — así "TEXT" (tipo) y "relationship"/"ship" (substring
+                # casual) dejan de disparar falsos positivos, pero un campo real llamado
+                # p.ej. "user_agent" o "ip_address" sigue detectándose.
                 sensitive_keywords = ['plaintext', 'message', 'body', 'text', 'content', 'metadata', 'ip', 'user_agent']
+                sensitive_keyword_tokens = [kw.split('_') for kw in sensitive_keywords]
                 found_sensitive = []
-                for schema in schemas:
-                    schema_lower = schema.lower()
-                    for keyword in sensitive_keywords:
-                        if keyword in schema_lower:
-                            found_sensitive.append(f"{keyword} in {schema}")
+                for table in tables:
+                    cursor.execute(f"PRAGMA table_info({table})")
+                    for col_row in cursor.fetchall():
+                        col_name = col_row[1]
+                        col_tokens = col_name.lower().split('_')
+                        for keyword, kw_tokens in zip(sensitive_keywords, sensitive_keyword_tokens):
+                            n = len(kw_tokens)
+                            if any(col_tokens[i:i + n] == kw_tokens for i in range(len(col_tokens) - n + 1)):
+                                found_sensitive.append(f"{keyword} in {table}.{col_name}")
 
                 if not found_forbidden and not found_sensitive:
                     self.log_success("Cero Metadatos: Ninguna tabla relacional ni columna sensible existe en el DDL de disco.")
@@ -177,6 +192,22 @@ class Phase7Auditor:
             print("El backend cumple íntegramente con el modelo Zero-Knowledge.")
         else:
             print("⚠️ STATUS: REQUIERE REMEDIACIÓN")
+
+def test_phase7_audit():
+    # Sin esta función, pytest no colecciona nada de este archivo: toda la lógica de
+    # Phase7Auditor vive detrás de `if __name__ == "__main__"`, que nunca se ejecuta bajo
+    # `pytest tests/phase7_audit.py` (pytest importa el módulo, no lo corre como script).
+    # La CI venía "corriendo" este archivo sin verificar realmente nada. Requiere el
+    # servidor levantado en 127.0.0.1:8000 (ver .github/workflows/python.yml) -- si no
+    # está, run_level2_live_audit lo detecta y este assert falla en vez de dar falso OK.
+    auditor = Phase7Auditor()
+    auditor.run_level1_static_audit()
+    auditor.run_level2_live_audit()
+    auditor.generate_report()
+    assert auditor.score == auditor.max_score, (
+        f"Phase7 audit: {auditor.score}/{auditor.max_score} checks pasaron."
+    )
+
 
 if __name__ == "__main__":
     auditor = Phase7Auditor()

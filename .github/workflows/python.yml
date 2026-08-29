@@ -29,12 +29,36 @@ jobs:
     - name: Run Bandit SAST
       run: bandit -r hermes_backend -ll -q
       
+    - name: Start backend server for live-audit tests
+      env:
+        PYTHONPATH: .
+        SESSION_SECRET: ci-test-session-secret-please-ignore-32chars
+        ALLOWED_ORIGINS: http://localhost:8000
+      run: |
+        nohup uvicorn hermes_backend.network_core.api:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
+        for i in $(seq 1 30); do
+          if curl -sf http://127.0.0.1:8000/docs > /dev/null; then
+            echo "Server is up"
+            break
+          fi
+          sleep 1
+        done
+
     - name: Run Unit & Property Tests with Coverage
       env:
         PYTHONPATH: .
       run: |
-        pytest tests/test_hybrid_encryptor.py tests/phase7_audit.py --cov=hermes_backend --cov-report=xml
-        
+        pytest tests/test_hybrid_encryptor.py tests/phase7_audit.py tests/test_login_auth.py \
+          tests/test_ws_auth.py tests/test_ws_delivery.py tests/test_session_revocation.py \
+          tests/test_backup_upload_flow.py tests/test_recovery_cloud_sync.py \
+          tests/test_reconciliation.py tests/test_blind_relay_zeroization.py \
+          tests/property_based/test_crypto_properties.py \
+          --cov=hermes_backend --cov-report=xml
+
+    - name: Show backend server log on failure
+      if: failure()
+      run: cat uvicorn.log || true
+
     - name: Upload Coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
