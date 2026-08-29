@@ -1,0 +1,99 @@
+name: Frontend Tests (Vitest + E2E)
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch: {}
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vitest
+        run: npm test
+
+  # audit_e2e.cjs (Alice/Bob/Charlie, contextos aislados de Playwright) ejercita el flujo
+  # real de registro/login/mensajería 1:1 y grupal contra un backend+frontend reales -- es
+  # el mismo terreno que full_flow_test.js/messaging_tests.js (dejados como scripts
+  # manuales, no migrados a Vitest: necesitan DOM real, y eso choca con la carga del WASM
+  # real bajo Node -- ver vitest.setup.js). Corre solo en push a main/develop o manual, no
+  # en cada PR, porque levantar backend+frontend+Chromium es bastante más pesado que el
+  # job de Vitest de arriba.
+  e2e:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start backend (SQLite fallback, sin HERMES_ENV=production)
+        env:
+          PYTHONPATH: .
+          SESSION_SECRET: ci-e2e-session-secret-please-ignore-32chars
+          ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+        run: |
+          nohup uvicorn hermes_backend.network_core.api:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8000/docs > /dev/null; then
+              echo "Backend is up"; break
+            fi
+            sleep 1
+          done
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Start frontend dev server
+        working-directory: frontend
+        run: |
+          nohup npm run dev -- --port 5173 --strictPort > vite.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:5173/ > /dev/null; then
+              echo "Frontend is up"; break
+            fi
+            sleep 1
+          done
+
+      - name: Run Playwright e2e audit (Alice/Bob/Charlie)
+        working-directory: frontend
+        run: node audit_e2e.cjs
+
+      - name: Show server logs on failure
+        if: failure()
+        run: |
+          echo "--- backend ---"; cat uvicorn.log || true
+          echo "--- frontend ---"; cat frontend/vite.log || true
