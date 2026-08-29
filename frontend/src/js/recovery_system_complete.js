@@ -46,6 +46,9 @@ export class CompleteRecoverySystem {
         this.userIdHash = null;
         this.recoveryKey = null; // flag: true una vez que hay mnemonic+userIdHash listos para autoBackup
         this.autoBackupInterval = null;
+        this._running = false; // guarda de idempotencia de startAutoBackup(), ver ese método
+        this._onContactsUpdated = null;
+        this._onGroupsUpdated = null;
     }
 
     /**
@@ -326,24 +329,37 @@ export class CompleteRecoverySystem {
 
     /**
      * Iniciar backups automáticos periódicos.
+     *
+     * BUG real encontrado probando el flujo de registro en vivo (no solo por lectura de
+     * código): tanto initialize() (arriba) como doLoginTransition() (auth_ui.js) llaman a
+     * startAutoBackup() en el MISMO flujo de registro -- sin guarda de idempotencia esto
+     * disparaba el backup inmediato dos veces (mismo `timestamp` de segundo, misma firma
+     * -> colisión de anti-replay -> 401 espurio en consola, `[Recovery] El servidor
+     * rechazó el backup: 401`) y dejaba DOS listeners de hermes:contacts_updated/
+     * groups_updated apilados (cada evento futuro disparaba autoBackup() por duplicado).
+     * `this._running` hace que la segunda llamada en el mismo flujo sea un no-op; sigue
+     * siendo re-armable después de un stopAutoBackup() real.
      */
     startAutoBackup() {
+        if (this._running) return;
+        this._running = true;
+
         // Backup inmediato
         this.autoBackup();
-        
+
         // Backup cada 5 minutos
-        if (this.autoBackupInterval) clearInterval(this.autoBackupInterval);
         this.autoBackupInterval = setInterval(() => {
             this.autoBackup();
         }, 5 * 60 * 1000);
-        
-        // Backup en cambios de contactos
-        document.addEventListener('hermes:contacts_updated', () => this.autoBackup());
-        
-        // Backup en cambios de grupos
-        document.addEventListener('hermes:groups_updated', () => this.autoBackup());
+
+        // Backup en cambios de contactos/grupos -- referencias guardadas para poder
+        // remover exactamente estos listeners en stopAutoBackup(), no acumularlos.
+        this._onContactsUpdated = () => this.autoBackup();
+        this._onGroupsUpdated = () => this.autoBackup();
+        document.addEventListener('hermes:contacts_updated', this._onContactsUpdated);
+        document.addEventListener('hermes:groups_updated', this._onGroupsUpdated);
     }
-    
+
     /**
      * Detener backups automáticos.
      */
@@ -352,6 +368,15 @@ export class CompleteRecoverySystem {
             clearInterval(this.autoBackupInterval);
             this.autoBackupInterval = null;
         }
+        if (this._onContactsUpdated) {
+            document.removeEventListener('hermes:contacts_updated', this._onContactsUpdated);
+            this._onContactsUpdated = null;
+        }
+        if (this._onGroupsUpdated) {
+            document.removeEventListener('hermes:groups_updated', this._onGroupsUpdated);
+            this._onGroupsUpdated = null;
+        }
+        this._running = false;
     }
 }
 
