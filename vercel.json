@@ -8,11 +8,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://REPLACE_WITH_RENDER_BACKEND_URL.onrender.com/api/:path*"
+      "destination": "https://hermetic.onrender.com/api/:path*"
     },
     {
       "source": "/ws/:path*",
-      "destination": "https://REPLACE_WITH_RENDER_BACKEND_URL.onrender.com/ws/:path*"
+      "destination": "https://hermetic.onrender.com/ws/:path*"
     }
   ]
 }
