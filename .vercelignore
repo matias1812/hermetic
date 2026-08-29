@@ -9,8 +9,12 @@ hermes_ip_middleware/
 formal_spec/
 traceability/
 test_vectors/
-tests/
-tests;C/
+# Anclado a la raíz ("/tests/", no "tests/"): sin la barra inicial, este patrón
+# estilo gitignore matchea CUALQUIER carpeta llamada "tests" a cualquier
+# profundidad -- incluía por accidente frontend/src/js/tests/, de donde
+# verification_suite.js importa full_flow_test.js/double_ratchet_test.js.
+# Vercel borraba esa carpeta antes de buildear -> "could not resolve" en el build.
+/tests/
 scratch/
 scripts/
 ci/
