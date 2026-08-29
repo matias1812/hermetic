@@ -26,6 +26,7 @@ from hermes_backend.network_core.load_balancer import ConnectionLimiter, RateLim
 from hermes_backend.network_core.otp_registry import global_registry
 from hermes_backend.network_core.ephemeral_media_store import EphemeralImageStore
 from hermes_backend.crypto_core.image_encryptor import ImageEncryptor
+from hermes_backend.verification.memory_safety import MemorySafetyVerify
 
 logger = logging.getLogger(__name__)
 
@@ -158,27 +159,6 @@ def _validate_allowed_origin(origin: str) -> bool:
     return parsed.scheme in ("http", "https") and bool(parsed.netloc)
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "object-src 'none'; "
-            "base-uri 'none'; "
-            "frame-ancestors 'none';"
-        )
-        response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-        if os.getenv("HERMES_ENV") == "production":
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
-        return response
-
-
 class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.method == "OPTIONS":
@@ -199,8 +179,8 @@ class PayloadSizeLimitMiddleware(BaseHTTPMiddleware):
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
             response.headers["Server"] = "Hermes-Relay" # Ocultar info de uvicorn/fastapi
-            response.headers["X-Content-Type-Options"] = "nosniff"
-            response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none';"
+            # X-Content-Type-Options/Content-Security-Policy no van acá: add_security_headers
+            # (más abajo) los pisa siempre en la salida real de todas formas.
             return response
         return await call_next(request)
 
@@ -225,7 +205,6 @@ for origin in allowed_origins:
 
 app.add_middleware(TotalPrivacyMiddleware)
 app.add_middleware(PayloadSizeLimitMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -278,6 +257,23 @@ rate_limiter = RateLimiter()
 # tiene hoy sobre a quién reenviar.
 image_store = EphemeralImageStore()
 MAX_EPHEMERAL_IMAGE_BYTES = 6 * 1024 * 1024
+
+# SEC: el chequeo `startswith("data:image/")` de más abajo solo valida el string declarado
+# por el cliente, no los bytes reales -- "data:image/svg+xml;base64,..." lo pasa igual, y
+# SVG es XML (puede llevar <script>/manejadores de evento embebidos). Esto valida la firma
+# real de los primeros bytes contra los formatos raster que esta feature necesita mostrar,
+# y rechaza todo lo demás (incluido SVG explícitamente) sin importar qué diga el prefijo.
+_RASTER_SIGNATURES = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",       # JPEG
+    b"GIF8",               # GIF87a / GIF89a
+)
+
+
+def _is_known_raster_image(raw_bytes: bytes) -> bool:
+    if raw_bytes[:4] == b"RIFF" and raw_bytes[8:12] == b"WEBP":
+        return True
+    return any(raw_bytes.startswith(sig) for sig in _RASTER_SIGNATURES)
 
 # Gestor de conexiones WebSocket activas
 class BlindWSManager:
@@ -888,6 +884,9 @@ async def upload_group_ephemeral_image_endpoint(
     if len(raw_bytes) > MAX_EPHEMERAL_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Image too large")
 
+    if not _is_known_raster_image(raw_bytes):
+        raise HTTPException(status_code=400, detail="File is not a recognized raster image (PNG/JPEG/GIF/WebP)")
+
     # Se cifra el data URL completo (no solo los bytes crudos de la imagen) para que
     # el fetch devuelva exactamente lo que el cliente necesita para img.src, sin
     # tener que reconstruir el prefijo "data:image/...;base64," por separado.
@@ -1055,31 +1054,45 @@ async def fetch_blobs_endpoint(
 
 @app.api_route("/api/verify", methods=["GET", "POST"])
 async def system_verification(request: Request):
-    """Diagnóstico HONESTO del sistema compatible con test_endpoints.py."""
+    """Diagnóstico HONESTO del sistema compatible con test_endpoints.py.
+
+    SEC: este endpoint devolvía un dict HARDCODEADO con los 4 campos en
+    `passed: True` sin llamar a ninguna verificación real -- cualquiera podía pegarle
+    directo (es público, solo rate-limited) y recibir una afirmación fabricada de
+    "todo verificado". Mismo patrón de "dato fabricado + afirmación de seguridad
+    absoluta" que ya se sacó de admin_pro.js. `memory_safety` ahora sí corre
+    MemorySafetyVerify.run_test() de verdad en cada request (ver
+    traceability/requirements.json, que ya lo documentaba como el `tested_by` real de
+    ese requisito, solo que nunca estuvo conectado). Los otros tres no tienen un
+    verificador real detrás hoy -- se devuelven marcados explícitamente como no
+    implementados en vez de inventar un resultado.
+    """
     ip = request.state.blind_ip
     if not rate_limiter.check_rest(f"{ip}_verify", limit=100, window=60.0):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-        
+
+    memory_safety_result = MemorySafetyVerify.run_test()
+
     return {
         "memory_safety": {
-            "name": "Memory Safety / Secure Zeroization Audit",
-            "passed": True,
-            "details": "Rust WASM (ZeroizeOnDrop) memory zeroization verified."
+            "name": memory_safety_result.get("name", "Memory Safety / Secure Zeroization Audit"),
+            "passed": memory_safety_result.get("passed", False),
+            "details": "; ".join(memory_safety_result.get("logs", [])) or "Sin detalle.",
         },
         "entropy_tests": {
             "name": "NIST SP 800-22 Entropy Verification Suite",
-            "passed": True,
-            "details": "XChaCha20Poly1305 keystream mask passes statistical checks."
+            "passed": None,
+            "details": "No implementado -- no hay un verificador real conectado a este campo."
         },
         "timing_tests": {
             "name": "Software Constant-Time Verification Audit",
-            "passed": True,
-            "details": "AEAD operations execute in constant time."
+            "passed": None,
+            "details": "No implementado -- no hay un verificador real conectado a este campo."
         },
         "perfect_secrecy": {
             "name": "Shannon Perfect Secrecy Mathematical Demonstration",
-            "passed": True,
-            "details": "Note: Keys are wrapped under X25519/Ed25519, not perfect secrecy."
+            "passed": None,
+            "details": "No implementado -- no hay un verificador real conectado a este campo."
         }
     }
 

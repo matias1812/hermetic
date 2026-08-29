@@ -32,6 +32,20 @@ class EphemeralStore {
     remove(targetId, msgId) {
         this.byTarget.get(targetId)?.delete(msgId);
     }
+
+    // Espejo de LocalChatManager.updateMessageStatusById (chat_manager.js) para el caso
+    // efímero: flushOutbox() no sabe a priori en qué targetId vive un mensaje reintentado,
+    // así que busca en todos igual que su equivalente no-efímero.
+    updateStatusById(msgId, newStatus) {
+        for (const msgs of this.byTarget.values()) {
+            const msg = msgs.get(msgId);
+            if (msg) {
+                msg.status = newStatus;
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 export const ephemeralStore = new EphemeralStore();

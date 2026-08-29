@@ -370,11 +370,14 @@ impl HermesEngineWasm {
         let session_key_bytes = session_key_hex.as_bytes();
         let mut hasher = Sha256::new();
         hasher.update(session_key_bytes);
-        let aes_key_bytes = hasher.finalize();
+        let mut aes_key_bytes = hasher.finalize();
 
         let key = Key::<Aes256Gcm>::try_from(aes_key_bytes.as_slice()).map_err(|_| {
             JsValue::from_str("Fail-Closed: longitud de clave AES-256-GCM inválida")
         })?;
+        // aes_key_bytes ya se copió dentro de `key` (Key es un array propio, no una
+        // referencia) -- zeroizar la copia intermedia, antes vivía sin limpiar.
+        aes_key_bytes.zeroize();
         let cipher = Aes256Gcm::new(&key);
 
         let mut nonce_bytes = [0u8; 12];
@@ -456,10 +459,11 @@ impl HermesEngineWasm {
         let session_key_bytes = session_key_hex.as_bytes();
         let mut hasher = Sha256::new();
         hasher.update(session_key_bytes);
-        let aes_key_bytes = hasher.finalize();
+        let mut aes_key_bytes = hasher.finalize();
         let key = Key::<Aes256Gcm>::try_from(aes_key_bytes.as_slice()).map_err(|_| {
             JsValue::from_str("Fail-Closed: longitud de clave AES-256-GCM inválida")
         })?;
+        aes_key_bytes.zeroize();
         let cipher = Aes256Gcm::new(&key);
 
         let get_string = |obj: &JsValue, prop: &str| -> String {

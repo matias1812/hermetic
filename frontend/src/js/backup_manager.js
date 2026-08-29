@@ -1,7 +1,5 @@
 // backup_manager.js
 import { hermesBridge } from './crypto_wasm_bridge.js';
-import { state } from './state.js';
-import { CryptoClient } from './crypto_client.js';
 
 export class BackupManager {
     /**
@@ -235,40 +233,6 @@ export class BackupManager {
          * BACKWARD COMPATIBLE: soporta v7.1 (sin gzip) y v7.2+ (con gzip).
          */
         return hermesBridge.decryptBackupData(encrypted, password);
-    }
-
-    // Fuente única de subida a /api/backup (BACKLOG #2 — antes duplicada casi
-    // idéntica en auto_backup_trigger.js::uploadToCloud y en _doAutoBackup de acá
-    // abajo). recovery_system_complete.js NO delega acá a propósito: deriva su
-    // clave de un mnemónico en vez de la contraseña/vault local, es un sistema
-    // conceptualmente distinto, no un duplicado.
-    async uploadToCloud(encryptedBuffer, backupType = 'full', algorithm = 'AES-GCM/Argon2') {
-        const userHash = this.storage.getUserId();
-        const hexData = this._bufferToHex(encryptedBuffer);
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = await CryptoClient.signTimestamp(timestamp, state.userKeys?.sphincs_sk);
-        const sessionToken = sessionStorage.getItem('hermes_session_token');
-
-        const headers = { 'Content-Type': 'application/json' };
-        if (sessionToken) headers['Authorization'] = `Bearer ${sessionToken}`;
-
-        const res = await fetch('/api/backup', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-                user_hash: userHash,
-                encrypted_data_hex: hexData,
-                backup_id: crypto.randomUUID(),
-                backup_type: backupType,
-                parent_id: null,
-                timestamp,
-                signature,
-                version: 1,
-                algorithm,
-            }),
-        });
-        if (!res.ok) throw new Error(`Cloud upload failed: HTTP ${res.status}`);
-        return res.json();
     }
 
     async downloadBackupFile(data) {

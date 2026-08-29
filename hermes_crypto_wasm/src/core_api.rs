@@ -1220,7 +1220,7 @@ impl HermesCore {
             })
         };
 
-        let seed_bytes = hex::decode(local_kyber_sk_hex).map_err(|_| {
+        let mut seed_bytes = hex::decode(local_kyber_sk_hex).map_err(|_| {
             JsValue::from_str("Fail-Closed: local_kyber_sk_hex no es hexadecimal válido")
         })?;
         let seed: ml_kem::Seed = seed_bytes.as_slice().try_into().map_err(|_| {
@@ -1228,6 +1228,9 @@ impl HermesCore {
                 "Fail-Closed: longitud de semilla ML-KEM inválida (se esperan 64 bytes)",
             )
         })?;
+        // seed ya tiene su propia copia (try_into copia el slice); zeroizar la semilla
+        // cruda de acá, que si no quedaba viva en memoria sin limpiar.
+        seed_bytes.zeroize();
         let dk = DecapsulationKey::<MlKem1024>::from_seed(seed);
 
         let ct_bytes = get_hex("kyber_ct_hex")?;
