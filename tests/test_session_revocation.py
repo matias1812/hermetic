@@ -51,7 +51,7 @@ class TestSessionRevocation(unittest.TestCase):
         try:
             conn = db._get_connection()
             cur = conn.cursor()
-            if db.is_mysql:
+            if db.is_postgres:
                 cur.execute("DELETE FROM users WHERE id_hash = %s", (self.client_id,))
             else:
                 cur.execute("DELETE FROM users WHERE id_hash = ?", (self.client_id,))
