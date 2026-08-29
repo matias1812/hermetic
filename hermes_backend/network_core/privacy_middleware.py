@@ -62,7 +62,19 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         # 1. Anonimizar IP INMEDIATAMENTE
-        original_ip = request.client.host if request.client else "unknown"
+        # SEC: request.client.host es el peer TCP directo del transporte ASGI -- en Render
+        # (confirmado en vivo, 2026-08-29: TODAS las líneas de log real mostraban un rango
+        # privado 10.x.x.x) eso es la IP INTERNA del proxy de Render, nunca la del usuario
+        # real, porque Render pone Cloudflare delante incluso del dominio *.onrender.com
+        # crudo (confirmado con `curl -sI` contra producción: header `Server: cloudflare` +
+        # `CF-RAY` presentes). Cloudflare siempre sobreescribe `CF-Connecting-IP` en su
+        # borde con la IP real del visitante -- el origin (este contenedor) nunca es
+        # alcanzable saltándose Cloudflare, así que este header no es falsificable por el
+        # cliente. Sin este fix, la "anonimización" operaba sobre una IP que ya no
+        # identificaba a nadie, Y el rate-limiting por IP (`{ip}_login`, `{ip}_register`,
+        # etc.) compartía el mismo puñado de buckets (uno por nodo interno de Render) entre
+        # TODOS los usuarios reales, en vez de limitar por usuario.
+        original_ip = request.headers.get("CF-Connecting-IP") or (request.client.host if request.client else "unknown")
         if os.getenv("TESTING_MODE") == "1" and original_ip in ("127.0.0.1", "::1", "localhost"):
             original_ip = request.headers.get("X-Test-IP", original_ip)
         anonymized_ip = self._anonymize_ip_completely(original_ip)
