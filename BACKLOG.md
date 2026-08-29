@@ -400,6 +400,220 @@ Con esto, los 5 workflows de CI que nunca habían corrido de verdad en GitHub Ac
 punta a punta**, cada step verificado individualmente contra el comando exacto que usa el
 workflow real, no solo "el archivo se lee bien" ni Docker local aproximado.
 
+### Sexta vuelta (2026-08-28): red cortada a mitad de un envío, backup a la nube eliminado, malware disfrazado de imagen, zeroización real y variables de entorno
+
+Pedido explícito del usuario tras cerrar el CI: (1) terminar de probar en vivo el último
+caso adversarial pendiente (red cortada a mitad de un envío), y (2) abrir una auditoría de
+fuga de datos backend+frontend, zeroización real (no solo reclamada), variables de entorno,
+y el flujo de backup ya logeado desde Settings — con dos ejes agregados sobre la marcha:
+qué pasa si un usuario manda malware disfrazado de imagen, y si eso podría "infectar" un
+backup restaurado en otro dispositivo.
+
+**1. Red cortada a mitad de un envío — probado en vivo con Chrome DevTools (fetch
+interceptado + eventos reales `online`/`offline`, no inferencia):**
+- Mensaje normal: cortar la red justo al enviar → el mensaje queda `status:'pending'` en la
+  UI y entra al outbox (`frontend/src/js/sync_manager.js:1136-1149`) — confirmado con
+  `state.chatMessages`/`hermesStore.state.outbox` en vivo (`outboxLength:1`). Al reconectar
+  (`window.dispatchEvent(new Event('online'))`), `flushOutbox()` lo reintenta solo y pasa a
+  `status:'sent'`, outbox vacío. Funciona exactamente como está diseñado.
+- **Gap real encontrado y arreglado (con evidencia antes/después en vivo)**: los mensajes
+  efímeros (`ephemeral_text/image/audio`) quedaban excluidos del outbox a propósito
+  (`sync_manager.js:1136`, chequeo `!payloadObj.type.startsWith("ephemeral_")`). Se probó en
+  vivo con "vista única" activado + red cortada: el mensaje quedaba con `status:'pending'` en
+  memoria (mismo ícono que el caso normal, **engañando** al usuario — parecía que se iba a
+  reintentar) pero `outboxLength` se quedaba en `0`. Al reconectar, el mensaje se quedaba
+  pegado en `'pending'` para siempre; al recargar la página, desaparecía completamente del
+  historial sin ningún aviso (`EphemeralStore`, `frontend/src/js/ephemeral_store.js`, es solo
+  en memoria, nunca se persiste). No era una fuga de datos (el mensaje nunca llegó a nadie),
+  pero sí una pérdida silenciosa de UX con una señal visual engañosa.
+  - **Fix** (pedido explícito del usuario, "arreglemoslo"): en `sync_manager.js::sendBlob()`,
+    la condición que decide qué entra al outbox ya no excluye los tipos `ephemeral_*` —
+    solo excluye `typing`/`receipt` (que nunca deben reintentarse). El outbox solo guarda
+    `encrypted_blob_hex` (ciphertext) + hashes/timestamp, nunca texto plano, así que encolar
+    un efímero ahí no reintroduce la fuga en disco que `EphemeralStore` fue diseñado para
+    evitar. Se agregó `EphemeralStore.updateStatusById(msgId, newStatus)`
+    (`ephemeral_store.js`) — espejo de `LocalChatManager.updateMessageStatusById` — y
+    `flushOutbox()` ahora llama a ambos (uno de los dos siempre es no-op, según si el mensaje
+    reintentado era efímero o no) para que el `status` en memoria pase a `'sent'` cuando el
+    reintento realmente se entrega.
+  - **Verificado en vivo (después del fix), mismo método que el "antes"**: con "vista única"
+    activado, red cortada (`fetch` a `/api/relay` forzado a rechazar + `navigator.onLine` en
+    `false` + evento `offline` real) y un mensaje efímero enviado, `hermesStore.state.outbox`
+    pasó de `outboxLength:0` (antes) a `outboxLength:1` (después) — confirmado además que la
+    única entrada agregada solo tiene `id/sender_hash/receiver_hash/encrypted_blob_hex/
+    session_key_hash/timestamp`, cero texto plano. Al reconectar y llamar
+    `flushOutbox()`, el outbox volvió a `0` y las dos burbujas "Texto Efímero" de la prueba
+    pasaron a mostrar el mismo tick `✓` de "enviado" que ya usa un mensaje normal — confirmado
+    con zoom sobre la UI real, no solo leyendo el estado en JS.
+  - Nota de entorno: durante esta verificación el backend de desarrollo local había perdido
+    el registro de los usuarios de prueba (`blocktest_bob`/`collisiontest1` devolvían
+    `"...not registered"` en `/api/user/*` y `/api/relay`) — un problema de datos de prueba
+    obsoletos por reinicios del backend a lo largo de una sesión muy larga, no relacionado con
+    este fix. Se mockeó puntualmente esas dos respuestas del backend (mismo patrón que el
+    "antes") para poder ejercitar el código real de `sendBlob`/`flushOutbox`/`EphemeralStore`
+    sin ese ruido; la lógica de cifrado, el shape del outbox y el flip de estado que importan
+    para este hallazgo corrieron sin mockear.
+
+**2. Backup automático a la nube — eliminado por decisión explícita del usuario ("no existe
+backup en la nube, solo local"):**
+- Causa raíz: `frontend/src/js/auto_backup_trigger.js` tenía un destino `'cloud'` que, sin
+  una recovery key real cacheada, cifraba con `user_hash + '_local_auto_key'` — una clave
+  **derivable de información pública** (el `user_hash` es el hash del alias, pensado para
+  ser conocido por cualquiera que quiera contactar al usuario). Cualquiera que pudiera leer
+  una fila de `cloud_backups` (compromiso de DB, insider) y supiera el alias de la víctima
+  podía descifrar trivialmente su "backup cifrado", rompiendo el diseño zero-knowledge por
+  completo para ese camino específico.
+  - **Corrección de severidad, encontrada al implementar el fix**: la UI que exponía la
+    opción "Nube cifrada" (`frontend/src/js/privacy_settings.js::renderPrivacyPanel()`,
+    radio `bkpDest`) **nunca se invoca en ningún lado del código** — `grep` confirma cero
+    call sites de `renderPrivacyPanel()`. Es decir, ningún usuario real podía llegar a
+    activar este destino a través de la interfaz visible; la lógica vulnerable estaba viva y
+    conectada de punta a punta (`AutoBackupTrigger`→`BackupManager.uploadToCloud`→
+    `POST /api/backup`), pero el interruptor de la UI para prenderla era código muerto. No
+    cambia que haya que arreglarlo (`backupDestination` se puede setear igual desde la
+    consola o si alguien reconecta ese panel sin re-auditar esto), pero sí cambia el riesgo
+    real de explotación en el estado actual del producto: bajo, no nulo.
+  - **Se dejó intacto a propósito**: el sistema de recuperación por 12 palabras
+    (`frontend/src/js/recovery_system_complete.js`) comparte el mismo endpoint `/api/backup`
+    como transporte, pero cifra con una clave derivada de verdad de la mnemónica
+    (`hermesBridge.encryptWithRecoveryKey(mnemonic, ...)`) — nunca predecible, nunca
+    derivable de info pública. Es la única forma de recuperar la cuenta si se pierde el
+    dispositivo; el usuario confirmó explícitamente que debía quedar como está.
+  - **Fix**: eliminado el destino `'cloud'` y el método `uploadToCloud()` de
+    `auto_backup_trigger.js` y de `backup_manager.js` (import muerto de `CryptoClient`
+    removido de paso); quitado el radio "Nube cifrada" de `privacy_settings.js` (queda
+    `'local'`/`'custom'`, ambos 100% locales — `'custom'` solo cambia la carpeta de descarga
+    vía `downloadBackupFile`, nunca toca la red). `auto_backup_trigger.js` ahora trata
+    cualquier valor de `backupDestination` que no sea exactamente `'custom'` como `'local'`
+    (defensivo: protege también a cuentas que ya tuvieran `'cloud'` cacheado en su
+    `hermes_privacy_settings` local de sesiones anteriores).
+  - **Verificado en vivo**: `npm run build` limpio tras los cambios; probado en el navegador
+    real que el modal de "Backups y Recuperación Maestra" ya no ofrece ningún control de
+    destino a la nube (el toggle "backup automático" visible solo expone intervalo, nunca
+    destino); el botón manual `[ Nuevo Backup ]` sigue siendo 100% local, confirmado por
+    lectura de código (nunca llamó a `uploadToCloud` ni antes ni ahora).
+
+**3. Malware disfrazado de imagen — magic bytes reales, cliente y servidor, probado en
+vivo con un SVG con `<script>` real:**
+- Causa raíz: la única validación antes de aceptar una "imagen" era
+  `file.type.startsWith('image/')` (`frontend/src/js/ui/chat_input.js:374`, cliente) y
+  `image_data_b64.startswith("data:image/")` (`hermes_backend/network_core/api.py`,
+  `/api/media/group-ephemeral-image`, servidor) — ambos validan solo el string que el
+  navegador/cliente *declara*, no los bytes reales. `image/svg+xml` pasa los dos chequeos, y
+  SVG es XML: puede llevar `<script>`/manejadores de evento embebidos.
+  - **Mitigación ya existente, confirmada por lectura de código y en vivo**: toda imagen
+    recibida se renderiza vía `<img>.src = dataURL`
+    (`frontend/src/js/ui/message_renderer.js:241,435,576`) — los navegadores modernos NO
+    ejecutan scripts embebidos en un SVG cargado así (a diferencia de `<object>`/`<iframe>`/
+    navegación directa). No hay XSS ejecutable por esta vía específica hoy.
+  - **Riesgo real que queda**: si el receptor guarda la "imagen" y la abre fuera del
+    navegador (u otro código futuro cambia el render a `<object>`/`<iframe>`), un
+    SVG-con-script sí se ejecutaría — mismo límite que cualquier app de mensajería, no
+    100% "arreglable", pero sí vale subir la vara barato.
+  - **Fix**: nuevo `frontend/src/js/utils/image_validation.js`
+    (`isFileRealImage()`/`isKnownRasterImage()`) que lee los primeros bytes reales del
+    archivo y los compara contra las firmas de PNG/JPEG/GIF/WebP, rechazando todo lo demás
+    (SVG incluido) sin importar qué diga la extensión o el `Content-Type`. Aplicado en
+    `chat_input.js` antes de aceptar el archivo del input de fotos. Mismo chequeo agregado
+    en el backend (`api.py::_is_known_raster_image`) sobre `raw_bytes` ya decodificados en
+    `/api/media/group-ephemeral-image`.
+  - **Verificado en vivo, no solo "debería funcionar"**: subido un `.svg` real con
+    `<script>window.__svg_script_executed=true</script>` vía el input de fotos real del chat
+    (`file_upload` sobre el elemento real) → rechazado antes del modal de confirmación
+    (`photoInput.value` se resetea, ningún mensaje nuevo se agrega,
+    `window.__svg_script_executed` nunca se puso en `true`). El mismo SVG mandado directo al
+    endpoint `/api/media/group-ephemeral-image` (con sesión real) → `400 "File is not a
+    recognized raster image"`. Un PNG real de 1×1 al mismo endpoint → `200` (sin regresión).
+    El mismo PNG real subido por el input de fotos real → pasa la validación y llega al
+    modal `[ ENVIAR IMAGEN ]` (confirmando que el chequeo nuevo no bloquea imágenes
+    legítimas; el envío en sí falló por un motivo no relacionado — el contacto de prueba no
+    estaba re-registrado en el backend de test recién reconstruido, nada que ver con este fix).
+- **Backup no agrega riesgo nuevo**: `backup_manager.js::readFile()` lee el `.hermes` como
+  bytes crudos, descifra vía WASM y trata el resultado como JSON (`JSON.parse`, no ejecuta
+  código) más los blobs de imagen ya cifrados tal cual estaban. Restaurar un backup no hace
+  más que traer de vuelta lo que ya se había aceptado al recibirlo la primera vez — el fix
+  de magic bytes de arriba ya previene que algo malicioso entre al store en primer lugar, así
+  que también previene que salga después vía backup/restore. No hizo falta ningún cambio
+  adicional acá, solo confirmar y documentar esta conclusión.
+
+**4. Zeroización real — 5 gaps confirmados y arreglados (Rust/WASM + Python), el resto de
+la memoria del proceso ya estaba sólida (`Drop` impls reales en `core_api.rs`,
+`ratchet/state.rs`, `x3dh.rs`, `blind_relay.py`, `ephemeral_media_store.py`):**
+- `hermes_backend/crypto_core/native_core.py:453`: `derive_aes_key(bytes(session_key))`
+  pasaba un `bytes` inmutable — el `safe_zeroize()` interno de `derive_aes_key` hacía no-op
+  silencioso (`isinstance(..., bytearray)` daba `False`). Fix: `bytearray(session_key)` en
+  ese call site puntual, igual que ya se hacía en `hybrid_encryptor.py`/`native_core.py:478`.
+- `hermes_crypto_wasm/src/core_api.rs::open_from_contact()`: la semilla cruda ML-KEM-1024
+  (`seed_bytes`, 64 bytes) nunca se zeroizaba. Fix: `seed_bytes.zeroize()` apenas se deriva
+  `seed` de ella.
+- `hermes_crypto_wasm/src/lib.rs::encrypt_legacy_payload`/`decrypt_legacy_payload`:
+  `aes_key_bytes` (SHA-256 de `session_key_hex`) nunca se zeroizaba, inconsistente con el
+  resto del archivo. Fix: `.zeroize()` en las dos funciones apenas se construye `key`.
+- `hermes_crypto_wasm/Cargo.toml`: `ed25519-dalek` no tenía el feature `"zeroize"`
+  habilitado — `SigningKey` no zeroizaba su copia interna al hacer `Drop`, pese a que el
+  comentario de cabecera de `lib.rs` afirma que "todas las claves/buffers sensibles usan
+  zeroize". Fix: agregado el feature.
+- `hermes_backend/network_core/api.py::/api/verify`: devolvía un dict **hardcodeado** con
+  los 4 campos (`memory_safety`, `entropy_tests`, `timing_tests`, `perfect_secrecy`) en
+  `passed: True` sin llamar a ninguna verificación real — endpoint público (solo
+  rate-limited), mismo patrón de "dato fabricado + afirmación de seguridad absoluta" que ya
+  se sacó de `admin_pro.js`. Fix: `memory_safety` ahora corre
+  `MemorySafetyVerify.run_test()` de verdad en cada request (ya documentado como el
+  `tested_by` real de ese requisito en `traceability/requirements.json`, solo que nunca
+  estuvo conectado); los otros tres, al no tener un verificador real detrás hoy, se
+  devuelven marcados explícitamente `passed: None` con `"No implementado"` en vez de
+  inventar un resultado.
+- **No tocados en esta pasada** (documentados, impacto marginal — todos requieren que un
+  atacante ya tenga lectura de memoria del proceso, momento en el que ya comprometió todo):
+  `create_session()`'s parámetros `Vec<u8>` sin zeroizar (la copia sí se zeroiza),
+  `pqc_shared_secret` de ML-KEM sin zeroizar explícito, `HermesEngineWasm::init_conversation`/
+  `WasmDoubleRatchet::new` sin zeroizar su copia local, `dh_ratchet.rs`
+  `message_key`/`SkippedKey` sin zeroizar tras uso, `MemoryStorageBackend` sin zeroizar al
+  borrar/sobreescribir, `hermes_backend/stego_engine/csprng_disperser.py` con
+  `aes_key`/`nonce_base` sin zeroizar, `api.py` con un `aes_key` local de imagen efímera sin
+  zeroizar tras pasarlo a `image_store`.
+- **Verificado en vivo, no solo "compila"**: `cargo fmt`/`cargo clippy -D warnings` limpios;
+  `wasm-pack test --node` → **18/18 tests pasan**, incluidos los 4 tests que ejercitan
+  exactamente `open_from_contact`/`encrypt_legacy_payload`/`decrypt_legacy_payload` (los
+  mismos que se escribieron en la vuelta anterior para la migración a `TryFrom`) — confirma
+  que agregar los `.zeroize()` no rompió ningún roundtrip de cifrado real. Artefacto WASM
+  real reconstruido (`build_wasm.sh` + `npm run build`) sin errores.
+
+**5. Variables de entorno — 3 defaults inseguros silenciosos cerrados con fail-closed
+explícito, más limpieza de un secreto de prueba en el repo:**
+- `hermes_backend/network_core/db_connection.py`: `DB_PASSWORD` default `""` — si `DB_HOST`
+  apunta a un host no-local pero se olvida `DB_PASSWORD`, la app intentaba conectar como
+  `root` sin contraseña en silencio. Fix (`CRITICAL SEC-03`): falla cerrado si `DB_HOST` no
+  es loopback y `DB_PASSWORD` está vacío. No afecta el caso legítimo de MySQL local sin
+  password (dev en `127.0.0.1`/`localhost`).
+- `hermes_backend/network_core/otp_registry.py`: `DATABASE_URL` default
+  `"mysql://root:root@localhost/hermeschat"` — un DSN con credencial hardcodeada de verdad
+  en el código fuente. Fix (`CRITICAL SEC-04`): sin default; si
+  `HERMES_REPLAY_BACKEND=sql` y `DATABASE_URL` no está seteada, falla cerrado explícito.
+- `hermes_backend/network_core/privacy_middleware.py`: `TESTING_MODE=1` (backdoor de
+  spoofing de IP vía header `X-Test-IP` para tests locales) no tenía ningún chequeo cruzado
+  con `HERMES_ENV`. Fix (`CRITICAL SEC-05`): falla cerrado si `TESTING_MODE=1` con
+  `HERMES_ENV=production`.
+- `scratch/audit_log_sample.py`: tenía un `SESSION_SECRET` de 32 caracteres hardcodeado en
+  texto plano (no es un secreto real, pero es higiene de repo). Fix: generado al vuelo con
+  `secrets.token_hex(16)` en vez de un literal fijo.
+- **Verificado en vivo, los 3 fail-closed y el caso sano**: rebuild del backend Docker con
+  todos los fixes → arranca limpio con la config de dev normal (`200`, "Application startup
+  complete", ningún check nuevo se dispara sin motivo). Cada check probado disparando
+  explícitamente la condición mala: `DB_HOST=algún-host-remoto` sin `DB_PASSWORD` →
+  `RuntimeError: CRITICAL SEC-03` (confirmado en el log real del contenedor);
+  `HERMES_REPLAY_BACKEND=sql` sin `DATABASE_URL` → `RuntimeError: CRITICAL SEC-04`
+  (ídem). El de `TESTING_MODE=1`+`HERMES_ENV=production` quedó tapado en el contenedor de
+  test por un gate *anterior* y no relacionado (`native_core.py` exige el binario Rust
+  `hermes_ffi` compilado en producción, que esta imagen de test no compila) — se probó
+  aislado, importando solo `privacy_middleware.py` sin pasar por el resto de `api.py`, y
+  disparó correctamente: `RuntimeError: CRITICAL SEC-05`.
+- **Verificado que nada de esto rompió lo demás**: `semgrep ci --config=semgrep.yml` (con
+  `git` real instalado esta vez, no la corrida anterior que había fallado por
+  `FileNotFoundError: git` aunque igual reportaba 0 hallazgos) → `Findings: 0 (0 blocking)`,
+  `exit 0`. `bandit -r hermes_backend -ll -q` → limpio. `pytest
+  tests/test_hybrid_encryptor.py tests/phase7_audit.py` → **10/10 passed**.
+
 ## ✅ Ya resuelto (2026-08-27)
 
 - Bypass de autenticación en `/api/login` (no verificaba nada — cualquiera se autenticaba

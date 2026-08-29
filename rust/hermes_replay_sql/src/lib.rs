@@ -1,39 +1,48 @@
 use hermes_ffi_core::errors::ReplayError;
 use hermes_ffi_core::replay::model::{ClaimToken, SignatureHash};
 use hermes_ffi_core::replay::store::ReplayStore;
-use mysql::prelude::Queryable;
-use mysql::{Pool, params};
+use postgres::NoTls;
+use postgres::error::SqlState;
+use r2d2::Pool;
+use r2d2_postgres::PostgresConnectionManager;
 use rand::{RngExt, rng};
 
 pub struct SqlReplayStore {
-    pool: Pool,
+    pool: Pool<PostgresConnectionManager<NoTls>>,
 }
 
 impl SqlReplayStore {
-    pub fn new(url: &str) -> Result<Self, mysql::Error> {
-        let pool = Pool::new(url)?;
+    pub fn new(url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let config: postgres::Config = url.parse()?;
+        // NoTls: mismo nivel de simplicidad que el crate `mysql` anterior (tampoco
+        // configuraba TLS explícito). Asume red interna/privada entre el backend y
+        // Postgres (p.ej. Render: mismo servicio y base en la misma región, conectados
+        // por la URL interna) -- si en algún momento la conexión cruza redes públicas
+        // sin VPN/red privada, esto necesita postgres-native-tls o postgres-openssl.
+        let manager = PostgresConnectionManager::new(config, NoTls);
+        let pool = Pool::new(manager)?;
         Ok(Self { pool })
     }
 
     pub fn health_check(&self) -> Result<(), ReplayError> {
         let mut conn = self
             .pool
-            .get_conn()
+            .get()
             .map_err(|e| ReplayError::StorageError(format!("Connection failed: {}", e)))?;
 
         // 1. Connection check
-        conn.query_drop("SELECT 1")
+        conn.execute("SELECT 1", &[])
             .map_err(|e| ReplayError::StorageError(format!("Ping failed: {}", e)))?;
 
         // 2. Schema version check
-        let version: Option<i32> = conn
-            .exec_first(
+        let row = conn
+            .query_opt(
                 "SELECT version FROM hermes_schema_version WHERE component = 'replay_registry'",
-                (),
+                &[],
             )
             .map_err(|e| ReplayError::StorageError(format!("Version query failed: {}", e)))?;
 
-        match version {
+        match row.map(|r| r.get::<_, i32>(0)) {
             Some(1) => {}
             Some(v) => {
                 return Err(ReplayError::StorageError(format!(
@@ -45,7 +54,7 @@ impl SqlReplayStore {
         }
 
         // 3. Basic column existence
-        conn.query_drop("SELECT replay_domain, signature_hash, state, claim_token, registered_at, expires_at FROM replay_claims LIMIT 1")
+        conn.execute("SELECT replay_domain, signature_hash, state, claim_token, registered_at, expires_at FROM replay_claims LIMIT 1", &[])
             .map_err(|e| ReplayError::StorageError(format!("Schema validation failed: {}", e)))?;
 
         Ok(())
@@ -55,6 +64,10 @@ impl SqlReplayStore {
         let mut token = [0u8; 16];
         rng().fill(&mut token);
         token
+    }
+
+    fn is_unique_violation(e: &postgres::Error) -> bool {
+        e.code() == Some(&SqlState::UNIQUE_VIOLATION)
     }
 }
 
@@ -68,13 +81,13 @@ impl ReplayStore for SqlReplayStore {
     ) -> Result<ClaimToken, ReplayError> {
         let mut conn = self
             .pool
-            .get_conn()
+            .get()
             .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
         // 1. Prune expired opportunistically
-        let _ = conn.exec_drop(
-            "DELETE FROM replay_claims WHERE expires_at < :now",
-            params! { "now" => now },
+        let _ = conn.execute(
+            "DELETE FROM replay_claims WHERE expires_at < $1",
+            &[&(now as i64)],
         );
 
         let token = Self::generate_token();
@@ -89,25 +102,26 @@ impl ReplayStore for SqlReplayStore {
                 claim_token,
                 registered_at,
                 expires_at
-            ) VALUES (:domain, :hash, 'pending', :token, :now, :expires)
+            ) VALUES ($1, $2, 'pending', $3, $4, $5)
         "#;
 
-        let result = conn.exec_drop(
+        let result = conn.execute(
             query,
-            params! {
-                "domain" => domain,
-                "hash" => signature_hash,
-                "token" => token,
-                "now" => now,
-                "expires" => expires_at,
-            },
+            &[
+                &domain,
+                &&signature_hash[..],
+                &&token[..],
+                &(now as i64),
+                &(expires_at as i64),
+            ],
         );
 
         match result {
             Ok(_) => Ok(token),
-            Err(mysql::Error::MySqlError(e)) if e.code == 1062 => {
-                // ER_DUP_ENTRY (1062) means the hash is already in the database for this domain.
-                // NOTE: The only UNIQUE constraint on this table must be PRIMARY KEY(replay_domain, signature_hash).
+            Err(e) if Self::is_unique_violation(&e) => {
+                // El hash ya está en la base para este dominio.
+                // NOTE: la única restricción UNIQUE de esta tabla debe ser
+                // PRIMARY KEY(replay_domain, signature_hash).
                 Err(ReplayError::AlreadyClaimed)
             }
             Err(e) => Err(ReplayError::StorageError(e.to_string())),
@@ -124,7 +138,7 @@ impl ReplayStore for SqlReplayStore {
     ) -> Result<(), ReplayError> {
         let mut conn = self
             .pool
-            .get_conn()
+            .get()
             .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
         let expires_at = now + ttl_seconds;
@@ -134,26 +148,27 @@ impl ReplayStore for SqlReplayStore {
             SET
                 state = 'consumed',
                 claim_token = NULL,
-                expires_at = :expires
+                expires_at = $1
             WHERE
-                replay_domain = :domain
-                AND signature_hash = :hash
+                replay_domain = $2
+                AND signature_hash = $3
                 AND state = 'pending'
-                AND claim_token = :token
+                AND claim_token = $4
         "#;
 
-        conn.exec_drop(
-            query,
-            params! {
-                "domain" => domain,
-                "expires" => expires_at,
-                "hash" => signature_hash,
-                "token" => token,
-            },
-        )
-        .map_err(|e| ReplayError::StorageError(e.to_string()))?;
+        let affected = conn
+            .execute(
+                query,
+                &[
+                    &(expires_at as i64),
+                    &domain,
+                    &&signature_hash[..],
+                    &&token[..],
+                ],
+            )
+            .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
-        if conn.affected_rows() == 1 {
+        if affected == 1 {
             Ok(())
         } else {
             Err(ReplayError::InvalidTransition)
@@ -170,7 +185,7 @@ impl ReplayStore for SqlReplayStore {
     ) -> Result<(), ReplayError> {
         let mut conn = self
             .pool
-            .get_conn()
+            .get()
             .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
         let expires_at = now + ttl_seconds;
@@ -180,26 +195,27 @@ impl ReplayStore for SqlReplayStore {
             SET
                 state = 'rejected',
                 claim_token = NULL,
-                expires_at = :expires
+                expires_at = $1
             WHERE
-                replay_domain = :domain
-                AND signature_hash = :hash
+                replay_domain = $2
+                AND signature_hash = $3
                 AND state = 'pending'
-                AND claim_token = :token
+                AND claim_token = $4
         "#;
 
-        conn.exec_drop(
-            query,
-            params! {
-                "domain" => domain,
-                "expires" => expires_at,
-                "hash" => signature_hash,
-                "token" => token,
-            },
-        )
-        .map_err(|e| ReplayError::StorageError(e.to_string()))?;
+        let affected = conn
+            .execute(
+                query,
+                &[
+                    &(expires_at as i64),
+                    &domain,
+                    &&signature_hash[..],
+                    &&token[..],
+                ],
+            )
+            .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
-        if conn.affected_rows() == 1 {
+        if affected == 1 {
             Ok(())
         } else {
             Err(ReplayError::InvalidTransition)
@@ -214,29 +230,23 @@ impl ReplayStore for SqlReplayStore {
     ) -> Result<(), ReplayError> {
         let mut conn = self
             .pool
-            .get_conn()
+            .get()
             .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
         let query = r#"
             DELETE FROM replay_claims
             WHERE
-                replay_domain = :domain
-                AND signature_hash = :hash
+                replay_domain = $1
+                AND signature_hash = $2
                 AND state = 'pending'
-                AND claim_token = :token
+                AND claim_token = $3
         "#;
 
-        conn.exec_drop(
-            query,
-            params! {
-                "domain" => domain,
-                "hash" => signature_hash,
-                "token" => token,
-            },
-        )
-        .map_err(|e| ReplayError::StorageError(e.to_string()))?;
+        let affected = conn
+            .execute(query, &[&domain, &&signature_hash[..], &&token[..]])
+            .map_err(|e| ReplayError::StorageError(e.to_string()))?;
 
-        if conn.affected_rows() == 1 {
+        if affected == 1 {
             Ok(())
         } else {
             Err(ReplayError::InvalidTransition)
@@ -244,14 +254,15 @@ impl ReplayStore for SqlReplayStore {
     }
 }
 
-// Tests de integración contra un MySQL real -- este crate nunca tuvo tests propios (ver
+// Tests de integración contra un Postgres real -- este crate nunca tuvo tests propios (ver
 // BACKLOG.md, sección "Baja prioridad"), la única verificación era una corrida manual
-// puntual en Docker. Requieren TEST_DATABASE_URL apuntando a un MySQL real con el esquema de
-// schema.sql ya aplicado; si la variable no está seteada, cada test se salta con un mensaje
-// en vez de fallar -- así `cargo test` sigue siendo rápido y hermético en una máquina sin
-// MySQL, y CI (que sí levanta un servicio MySQL, ver .github/workflows/rust_ffi.yml) ejercita
-// el camino real. Mismos escenarios que hermes_ffi_core/src/replay/mod.rs (InMemoryReplayStore)
-// para que ambos backends del trait ReplayStore queden probados con la misma cobertura.
+// puntual en Docker. Requieren TEST_DATABASE_URL apuntando a un Postgres real con el
+// esquema de schema.sql ya aplicado; si la variable no está seteada, cada test se salta
+// con un mensaje en vez de fallar -- así `cargo test` sigue siendo rápido y hermético en
+// una máquina sin Postgres, y CI (que sí levanta un servicio Postgres, ver
+// .github/workflows/rust_ffi.yml) ejercita el camino real. Mismos escenarios que
+// hermes_ffi_core/src/replay/mod.rs (InMemoryReplayStore) para que ambos backends del
+// trait ReplayStore queden probados con la misma cobertura.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,14 +277,14 @@ mod tests {
     }
 
     /// Conecta y limpia cualquier fila vieja para el dominio del test (idempotente entre
-    /// corridas -- a diferencia del store en memoria, MySQL persiste entre ejecuciones).
+    /// corridas -- a diferencia del store en memoria, Postgres persiste entre ejecuciones).
     fn setup(domain: &str) -> Option<SqlReplayStore> {
         let url = test_db_url()?;
         let store = SqlReplayStore::new(&url).expect("connect to TEST_DATABASE_URL");
-        let mut conn = store.pool.get_conn().expect("get_conn");
-        conn.exec_drop(
-            "DELETE FROM replay_claims WHERE replay_domain = :domain",
-            params! { "domain" => domain },
+        let mut conn = store.pool.get().expect("get connection");
+        conn.execute(
+            "DELETE FROM replay_claims WHERE replay_domain = $1",
+            &[&domain],
         )
         .expect("cleanup previous test rows");
         Some(store)
@@ -286,13 +297,13 @@ mod tests {
             .as_secs()
     }
 
-    macro_rules! require_mysql {
+    macro_rules! require_postgres {
         ($store:expr) => {
             match $store {
                 Some(s) => s,
                 None => {
                     eprintln!(
-                        "SKIPPED: set TEST_DATABASE_URL to a MySQL instance with schema.sql applied to run this test"
+                        "SKIPPED: set TEST_DATABASE_URL to a Postgres instance with schema.sql applied to run this test"
                     );
                     return;
                 }
@@ -302,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_claim_commit_flow() {
-        let store = require_mysql!(setup("sql_test_ccf"));
+        let store = require_postgres!(setup("sql_test_ccf"));
         let hash = [1u8; 32];
         let t = now();
 
@@ -332,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_reject_flow() {
-        let store = require_mysql!(setup("sql_test_reject"));
+        let store = require_postgres!(setup("sql_test_reject"));
         let hash = [2u8; 32];
         let t = now();
 
@@ -357,7 +368,7 @@ mod tests {
 
     #[test]
     fn test_release_flow() {
-        let store = require_mysql!(setup("sql_test_release"));
+        let store = require_postgres!(setup("sql_test_release"));
         let hash = [3u8; 32];
         let t = now();
 
@@ -371,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_invalid_token() {
-        let store = require_mysql!(setup("sql_test_invalid_token"));
+        let store = require_postgres!(setup("sql_test_invalid_token"));
         let hash = [4u8; 32];
         let t = now();
 
@@ -400,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_health_check() {
-        let store = require_mysql!(setup("sql_test_health"));
+        let store = require_postgres!(setup("sql_test_health"));
         store
             .health_check()
             .expect("health_check should pass against a properly migrated DB");
@@ -412,7 +423,7 @@ mod tests {
             Some(s) => Arc::new(s),
             None => {
                 eprintln!(
-                    "SKIPPED: set TEST_DATABASE_URL to a MySQL instance with schema.sql applied to run this test"
+                    "SKIPPED: set TEST_DATABASE_URL to a Postgres instance with schema.sql applied to run this test"
                 );
                 return;
             }
@@ -434,9 +445,9 @@ mod tests {
             .count();
 
         // A diferencia del store en memoria (Mutex local), acá lo que serializa las claims
-        // concurrentes es la restricción UNIQUE de MySQL (PRIMARY KEY(replay_domain,
-        // signature_hash)) atrapada como error 1062 -- exactamente el camino de claim() que
-        // traduce ese código a AlreadyClaimed.
+        // concurrentes es la restricción UNIQUE de Postgres (PRIMARY KEY(replay_domain,
+        // signature_hash)) atrapada como SqlState::UNIQUE_VIOLATION -- exactamente el
+        // camino de claim() que traduce ese código a AlreadyClaimed.
         assert_eq!(successes, 1);
         assert_eq!(errors, 19);
     }

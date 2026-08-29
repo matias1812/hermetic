@@ -1,0 +1,97 @@
+# Dockerfile.backend.production — artefacto de deploy real (HERMES_ENV=production).
+#
+# Promovido desde Dockerfile.backend.native-test (que sigue existiendo como harness de
+# prueba, no se borra) tras confirmarse end-to-end contra un contenedor MySQL 8 real
+# (ver BACKLOG.md #5) que este build SÍ compila todo lo necesario para arrancar en
+# production sin el abort fail-closed de native_core.py. Portado de MySQL a Postgres
+# (2026-08-29): tanto db_connection.py como el crate rust/hermes_replay_sql fueron
+# migrados y re-validados end-to-end contra Postgres real (Docker local), específicamente
+# para poder usar el Postgres gestionado de Render (no ofrece MySQL gestionado).
+#
+# Diferencia con Dockerfile.backend (que se mantiene para el caso "instancia única, sin
+# HERMES_ENV=production, SQLite/registro anti-replay en memoria"): este Dockerfile
+# además compila rust/hermes_ffi_py (el módulo nativo `hermes_ffi` que otp_registry.py y
+# native_core.py buscan) para Linux.
+#
+# Hallazgo importante (de la investigación original en Dockerfile.backend.native-test,
+# sigue aplicando acá): NO hace falta implementar el motor cripto nativo
+# (generate_keys_native/encapsulate_and_encrypt_native/decrypt_and_decapsulate_native)
+# para que el arranque en producción funcione. native_core.py solo aborta el arranque
+# (RuntimeError fatal) si el módulo `hermes_ffi` NO SE PUEDE IMPORTAR en absoluto; si se
+# importa pero le faltan esos símbolos, solo loguea un warning y sigue (esas funciones no
+# tienen ningún consumidor real en la app de todos modos -- ver BACKLOG.md #5). Lo que sí
+# es requisito real y con valor genuino es el registro anti-replay compartido
+# (NativeReplayRegistry/SqlReplayRegistry en hermes_ffi_py), que otp_registry.py YA
+# consume correctamente -- ese código está completo, solo hace falta compilarlo.
+#
+# REQUISITO antes de desplegar esta imagen de verdad: un Postgres real accesible, tanto
+# para db_connection.py (DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/DB_PORT) como para el
+# registro anti-replay compartido de hermes_replay_sql (DATABASE_URL, DSN
+# postgresql://... con el esquema de rust/hermes_replay_sql/schema.sql ya aplicado). En
+# Render, ambos pueden apuntar a la MISMA base Postgres gestionada (ver render.yaml —
+# provisiona una `databases:` de Render y deriva ambos sets de variables de ahí). Sin
+# DB_HOST el arranque no aborta (db_connection.py cae a SQLite local), pero sin
+# DATABASE_URL con HERMES_ENV=production el arranque SÍ aborta fail-closed
+# (otp_registry.py, CRITICAL SEC-04) -- no hay forma de "olvidarse" de este segundo.
+
+FROM rust:1.80-slim-bookworm AS ip_middleware_builder
+WORKDIR /build
+COPY hermes_ip_middleware/ ./hermes_ip_middleware/
+WORKDIR /build/hermes_ip_middleware
+RUN cargo build --release
+
+# hermes_ffi_py es un extension-module de PyO3 (cdylib) -- necesita compilar contra el
+# mismo Python 3.13 que corre en la imagen final, así que el builder parte de esa misma
+# imagen base en vez de la imagen genérica `rust:*`.
+FROM python:3.13-slim-bookworm AS ffi_builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /build
+COPY rust/ ./rust/
+WORKDIR /build/rust
+RUN cargo build --release -p hermes_ffi_py
+
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY hermes_backend/ ./hermes_backend/
+
+COPY --from=ip_middleware_builder \
+    /build/hermes_ip_middleware/target/release/libhermes_ip_middleware.so \
+    ./hermes_ip_middleware/target/release/libhermes_ip_middleware.so
+
+# El módulo se llama `hermes_ffi` (ver #[pymodule] fn hermes_ffi en hermes_ffi_py/src/lib.rs)
+# -- Python encuentra extensiones nativas por el nombre de archivo antes del primer punto,
+# así que el .so debe RENOMBRARSE de libhermes_ffi_py.so a hermes_ffi.so. Se copia
+# directo al site-packages del intérprete de esta imagen para que sea importable como
+# cualquier paquete instalado (`import hermes_ffi`).
+RUN PYSITE=$(python3 -c "import site; print(site.getsitepackages()[0])") && echo "$PYSITE" > /tmp/pysite
+COPY --from=ffi_builder /build/rust/target/release/libhermes_ffi_py.so /tmp/hermes_ffi.so
+RUN PYSITE=$(cat /tmp/pysite) && cp /tmp/hermes_ffi.so "$PYSITE/hermes_ffi.so"
+
+EXPOSE 8000
+
+ENV HERMES_ENV=production
+ENV HERMES_REPLAY_BACKEND=sql
+
+# Variables requeridas en runtime (las inyecta la plataforma de hosting, NO van acá):
+#   SESSION_SECRET      — HMAC de sesión, mínimo 32 caracteres
+#   ALLOWED_ORIGINS      — orígenes separados por coma (sin "*")
+#   DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/DB_PORT — Postgres real (ver nota arriba: sin
+#                          esto, el arranque no aborta pero cae a SQLite local, perdiendo
+#                          el propósito de este perfil de producción)
+#   DATABASE_URL         — DSN postgresql://... para el registro anti-replay compartido
+#                          (hermes_replay_sql) -- REQUERIDO, sin esto el arranque aborta
+#                          fail-closed con HERMES_ENV=production (otp_registry.py)
+
+# --no-access-log es OBLIGATORIO: sin esto, uvicorn imprime la IP real de cada cliente
+# en stdout sin pasar por PrivacyMiddleware (que solo anonimiza SUS propios logs, no
+# los del servidor HTTP).
+CMD ["sh", "-c", "uvicorn hermes_backend.network_core.api:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]

@@ -8,8 +8,10 @@ name: Rust FFI (hermes_ffi_core / hermes_replay_sql / hermes_ffi_py)
 # (HERMES_REPLAY_BACKEND=memory) en cualquier entorno que no sea producción explícita.
 # hermes_replay_sql (el backend SQL que exige producción) tampoco tenía NINGÚN test propio —
 # se le agregaron tests de integración reales (rust/hermes_replay_sql/src/lib.rs, módulo
-# `tests`) que corren acá contra un MySQL real (servicio de este workflow), no mockeado. Ver
-# BACKLOG.md, sección "Baja prioridad".
+# `tests`) que corren acá contra un Postgres real (servicio de este workflow), no mockeado.
+# Ver BACKLOG.md, sección "Baja prioridad". Portado de MySQL a Postgres (2026-08-29) para
+# poder usar el Postgres gestionado de Render (no ofrece MySQL) tanto para este backend
+# como para hermes_backend/network_core/db_connection.py.
 
 on:
   push:
@@ -67,18 +69,18 @@ jobs:
           cargo build
 
   test_replay_sql:
-    name: Test hermes_replay_sql (MySQL integration)
+    name: Test hermes_replay_sql (Postgres integration)
     runs-on: ubuntu-latest
     services:
-      mysql:
-        image: mysql:8
+      postgres:
+        image: postgres:16-alpine
         env:
-          MYSQL_ROOT_PASSWORD: testpass
-          MYSQL_DATABASE: hermes_test
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: hermes_test
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping -uroot -ptestpass"
+          --health-cmd="pg_isready -U postgres"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
@@ -89,13 +91,15 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Install MySQL client
+      - name: Install Postgres client
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq mysql-client
+          sudo apt-get install -y -qq postgresql-client
 
       - name: Apply schema
-        run: mysql -h127.0.0.1 -uroot -ptestpass hermes_test < rust/hermes_replay_sql/schema.sql
+        env:
+          PGPASSWORD: testpass
+        run: psql -h127.0.0.1 -Upostgres -d hermes_test -f rust/hermes_replay_sql/schema.sql
 
       - name: Check Formatting & Lints
         run: |
@@ -103,9 +107,9 @@ jobs:
           cargo fmt -- --check
           cargo clippy --tests -- -D warnings
 
-      - name: Run Tests (real MySQL, not mocked)
+      - name: Run Tests (real Postgres, not mocked)
         env:
-          TEST_DATABASE_URL: mysql://root:testpass@127.0.0.1:3306/hermes_test
+          TEST_DATABASE_URL: postgresql://postgres:testpass@127.0.0.1:5432/hermes_test
         run: |
           cd rust/hermes_replay_sql
           cargo test -- --test-threads=1

@@ -56,7 +56,7 @@ class TestReconciliation(unittest.TestCase):
             db.purge_relationships(cls.client_id)
             conn = db._get_connection()
             cur = conn.cursor()
-            if db.is_mysql:
+            if db.is_postgres:
                 cur.execute("DELETE FROM users WHERE id_hash = %s", (cls.client_id,))
             else:
                 cur.execute("DELETE FROM users WHERE id_hash = ?", (cls.client_id,))
@@ -164,7 +164,7 @@ class TestReconciliation(unittest.TestCase):
         db.purge_relationships(other_id)
         conn = db._get_connection()
         cur = conn.cursor()
-        if db.is_mysql:
+        if db.is_postgres:
             cur.execute("DELETE FROM users WHERE id_hash = %s", (other_id,))
         else:
             cur.execute("DELETE FROM users WHERE id_hash = ?", (other_id,))

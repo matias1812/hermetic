@@ -52,18 +52,19 @@ export class AutoBackupTrigger {
         }
 
         const settings = window.privacySettings?.settings;
-        const dest = settings?.backupDestination || 'local';
+        // SEC: el backup automático es SOLO local (backupDestination ya no admite 'cloud' --
+        // ver BACKLOG.md: el fallback de clave de acá abajo es derivable de info pública
+        // (user_hash), y subirlo cifrado "con eso" a un servidor rompía el diseño
+        // zero-knowledge para cualquiera que pudiera leer la fila en cloud_backups).
+        const dest = settings?.backupDestination === 'custom' ? 'custom' : 'local';
         const encryptionKey = localStorage.getItem('hermes_recovery_key_cache_' + state.storage.getUserId()) || (state.storage.getUserId() + '_local_auto_key');
 
         try {
             const allData = await state.backup._collectAllData();
             allData.checksum = await state.backup.calculateChecksum(allData);
             const encrypted = await state.backup.encryptBackup(allData, encryptionKey);
-            
-            if (dest === 'cloud') {
-                await this.uploadToCloud(encrypted);
-                this.showBackupToast('la Nube Cifrada');
-            } else if (dest === 'custom') {
+
+            if (dest === 'custom') {
                 state.backup.downloadBackupFile(encrypted);
                 this.showBackupToast('tu Carpeta (Descargas)');
             } else {
@@ -87,13 +88,6 @@ export class AutoBackupTrigger {
         } catch (error) {
             console.warn('⚠️ Auto-backup failed:', error);
         }
-    }
-
-    async uploadToCloud(encryptedBuffer) {
-        // Delegado a BackupManager (BACKLOG #2) -- fuente única de subida a
-        // /api/backup, antes duplicada acá casi idéntica.
-        const backupType = window.privacySettings?.settings.backupType || 'full';
-        await state.backup.uploadToCloud(encryptedBuffer, backupType);
     }
 
     showBackupToast(dest) {

@@ -1,8 +1,23 @@
+databases:
+  # Postgres gestionado de Render -- reemplaza el plan original de MySQL externo
+  # (Render no ofrece MySQL gestionado). Alimenta DOS consumidores distintos del backend,
+  # ver envVars más abajo: db_connection.py (users/cloud_backups/user_relationships, vía
+  # DB_HOST/DB_USER/...) y el registro anti-replay compartido de hermes_replay_sql (vía
+  # DATABASE_URL). Ambos comparten la misma instancia; no hace falta una base por consumidor.
+  - name: hermeticos-db
+    plan: free
+    databaseName: hermeschat
+    user: hermeticos
+
 services:
   - type: web
     name: hermeticos-backend
     runtime: docker
-    dockerfilePath: ./Dockerfile.backend
+    # Dockerfile.backend.production compila rust/hermes_ffi_py (registro anti-replay
+    # compartido + requisito de import para HERMES_ENV=production) además de
+    # hermes_ip_middleware, a diferencia de Dockerfile.backend. Ver el header de ese
+    # archivo para el detalle completo.
+    dockerfilePath: ./Dockerfile.backend.production
     dockerContext: .
     plan: free
     healthCheckPath: /
@@ -18,9 +33,40 @@ services:
         # en el proyecto hermano Vyneural).
         value: "http://localhost:5173,http://localhost:5174"
       - key: HERMES_ENV
-        # Sin fijar = development: sin header HSTS, registro anti-replay en memoria de
-        # proceso (no compartido entre instancias). Ver Dockerfile.backend para el porqué
-        # (hermes_ffi / SQL compartido no están compilados en esta imagen). No poner
-        # "production" acá sin antes compilar rust/hermes_ffi_py y provisionar MySQL/Postgres
-        # — con production y sin eso, el proceso aborta al arrancar (fail-closed, a propósito).
-        value: "development"
+        value: "production"
+      - key: HERMES_REPLAY_BACKEND
+        value: "sql"
+      # db_connection.py (users/cloud_backups/user_relationships) -- derivados
+      # automáticamente de la base `hermeticos-db` de arriba, Render los completa solo.
+      - key: DB_HOST
+        fromDatabase:
+          name: hermeticos-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: hermeticos-db
+          property: port
+      - key: DB_USER
+        fromDatabase:
+          name: hermeticos-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: hermeticos-db
+          property: password
+      - key: DB_NAME
+        fromDatabase:
+          name: hermeticos-db
+          property: database
+      # Registro anti-replay compartido (rust/hermes_replay_sql, vía hermes_ffi_py) --
+      # MISMA base que DB_*, pero como DSN completo (lo que espera SqlReplayStore::new).
+      # PASO MANUAL OBLIGATORIO tras el primer deploy: aplicar
+      # rust/hermes_replay_sql/schema.sql contra esta base (Render no corre migraciones
+      # automáticamente) -- si no, HERMES_ENV=production arranca pero cualquier operación
+      # que toque el anti-replay falla porque la tabla replay_claims no existe. Ver el
+      # Shell del servicio en el dashboard de Render, o psql directo con la
+      # connectionString externa (visible en la página de la base en Render).
+      - key: DATABASE_URL
+        fromDatabase:
+          name: hermeticos-db
+          property: connectionString

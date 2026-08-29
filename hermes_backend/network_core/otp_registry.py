@@ -37,10 +37,20 @@ class ReplayRegistry:
 
         env = os.getenv("HERMES_ENV", "development")
         backend = os.getenv("HERMES_REPLAY_BACKEND", "memory")
-        db_url = os.getenv("DATABASE_URL", "mysql://root:root@localhost/hermeschat")
+        db_url = os.getenv("DATABASE_URL")
 
         if env == "production" and backend != "sql":
             raise RuntimeError("Production requires the shared SQL replay backend (HERMES_REPLAY_BACKEND=sql)")
+
+        # SEC: el default anterior era un DSN con credencial hardcodeada de verdad
+        # (mysql://root:root@...) -- indistinguible de un secreto real si alguien lo
+        # copiaba a producción sin darse cuenta de que era solo un placeholder. Si se
+        # pidió el backend SQL, DATABASE_URL tiene que venir seteada explícitamente.
+        if backend == "sql" and not db_url:
+            raise RuntimeError(
+                "CRITICAL SEC-04: HERMES_REPLAY_BACKEND=sql requiere DATABASE_URL "
+                "seteada explícitamente (sin default con credencial hardcodeada)."
+            )
 
         self.use_native = NATIVE_AVAILABLE
         if self.use_native:

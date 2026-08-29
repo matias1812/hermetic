@@ -2,9 +2,9 @@
   "name": "hermes_crypto_wasm",
   "type": "module",
   "collaborators": [
-    "Hermetic Security Team"
+    "HermesChat Security Team"
   ],
-  "description": "Verifiable Constant-Time Cryptography & Memory Zeroization for Hermetic",
+  "description": "Verifiable Constant-Time Cryptography & Memory Zeroization for HermesChat",
   "version": "0.1.0",
   "license": "MIT",
   "files": [

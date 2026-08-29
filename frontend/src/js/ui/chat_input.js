@@ -3,6 +3,7 @@ import { state, showToast } from '../state.js';
 import { AudioRecorder } from '../audio_recorder.js';
 import { modalManager } from './modal_manager.js';
 import { ephemeralStore } from '../ephemeral_store.js';
+import { isFileRealImage } from '../utils/image_validation.js';
 
 export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSidebarCb) {
     let viewOnceEnabled = false;
@@ -376,7 +377,16 @@ export function setupChatInput(audioRecorder, renderMessagesCb, renderContactSid
                 photoInput.value = "";
                 return;
             }
-            
+            // SEC: file.type es lo que el navegador REPORTA (extensión/metadata), no los
+            // bytes reales -- image/svg+xml pasa el chequeo de arriba y SVG puede llevar
+            // <script> embebido. Validar la firma real de bytes (PNG/JPEG/GIF/WebP) antes
+            // de aceptar el archivo, sin importar qué diga su extensión o Content-Type.
+            if (!(await isFileRealImage(file))) {
+                showToast('El archivo no es una imagen válida (PNG/JPEG/GIF/WebP)', true);
+                photoInput.value = "";
+                return;
+            }
+
             const reader = new FileReader();
             reader.onload = async (event) => {
                 const base64Data = event.target.result;

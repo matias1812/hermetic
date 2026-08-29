@@ -376,6 +376,11 @@ export class SyncManager {
                     if (this.chats && typeof this.chats.updateMessageStatusById === 'function') {
                         await this.chats.updateMessageStatusById(this.storage, msg.id, 'sent');
                     }
+                    // Los mensajes efímeros ("vista única") viven en ephemeralStore (memoria),
+                    // no en this.chats.history -- probar los dos es inofensivo (uno de los dos
+                    // siempre va a ser un no-op) y evita que un efímero reintentado se quede
+                    // visualmente en "pending" para siempre pese a haberse enviado bien.
+                    ephemeralStore.updateStatusById(msg.id, 'sent');
                     if (this.onMessageSent) this.onMessageSent(msg.id);
                     if (this.onMessageReceived) this.onMessageReceived();
                 }
@@ -1132,8 +1137,18 @@ export class SyncManager {
             resJson = await res.json();
         } catch (e) {
             console.warn(`[SyncManager] Red falló al enviar mensaje:`, e.message);
-            // Si falla la red y NO es un mensaje efímero, lo guardamos en el Outbox
-            if (payloadObj.type !== "typing" && payloadObj.type !== "receipt" && !payloadObj.type.startsWith("ephemeral_")) {
+            // Si falla la red y no es una señal transitoria (typing/receipt -- reintentarlas
+            // minutos después ya no tiene sentido), lo guardamos en el Outbox para reintento.
+            // SEC/UX: esto SÍ incluye mensajes efímeros ("vista única") -- el outbox guarda
+            // encrypted_blob_hex, el mismo blob cifrado que se hubiera mandado igual, nunca
+            // texto plano, así que encolarlo no reintroduce el problema que ephemeral_store.js
+            // resolvió (nunca tocar disco con contenido efímero en claro). "Vista única" es una
+            // garantía sobre cuántas veces el RECEPTOR puede ver el mensaje después de
+            // entregado, no sobre si vale la pena reintentar una entrega que nunca ocurrió --
+            // antes, cortar la red a mitad de un envío efímero lo perdía en silencio para
+            // siempre (BACKLOG.md), sin ningún aviso pese a que la UI mostraba "pending" igual
+            // que un mensaje normal.
+            if (payloadObj.type !== "typing" && payloadObj.type !== "receipt") {
                 const outboxMsg = {
                     id: envelope.signature,
                     sender_hash: senderHash,
@@ -1147,7 +1162,7 @@ export class SyncManager {
                 } else if (window.state && window.state.store && typeof window.state.store.dispatch === 'function') {
                     await window.state.store.dispatch('OUTBOX_ADDED', outboxMsg);
                 }
-                console.info(`[SyncManager] Mensaje no efímero guardado en Outbox para reintento automático.`);
+                console.info(`[SyncManager] Mensaje guardado en Outbox para reintento automático.`);
             }
             
             // Retornamos un ID falso (la signature) para que la UI lo registre como "pending_send"

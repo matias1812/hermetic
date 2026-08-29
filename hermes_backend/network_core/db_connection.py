@@ -1,5 +1,5 @@
 import os
-import pymysql
+import psycopg
 import sqlite3
 import logging
 import time
@@ -31,31 +31,48 @@ class DatabaseConnection:
 
     def __init__(self):
         self.db_host = os.getenv("DB_HOST", "127.0.0.1")
-        self.db_user = os.getenv("DB_USER", "root")
+        self.db_user = os.getenv("DB_USER", "postgres")
         # Atributo de instancia necesario durante toda la vida del objeto
         # DatabaseConnection (se reusa en cada reconexion via _get_connection()), no un
         # secreto transitorio que tenga sentido zeroizar tras una sola lectura.
         self.db_password = os.getenv("DB_PASSWORD", "")  # nosemgrep: sensitive-data-in-memory
         self.db_name = os.getenv("DB_NAME", "hermeschat")
-        self.db_port = int(os.getenv("DB_PORT", "3306"))
-        
+        self.db_port = int(os.getenv("DB_PORT", "5432"))
+
+        # SEC: si alguien apunta DB_HOST a un Postgres de verdad (no loopback) pero se
+        # olvida DB_PASSWORD, el default vacio hace que la app intente conectar sin
+        # contraseña EN SILENCIO -- si ese Postgres resulta alcanzable y acepta auth sin
+        # password (misconfig comun en containers de dev/staging, p.ej. trust auth), queda
+        # accediendo sin que nadie lo haya decidido a propósito. No aplica al caso legitimo
+        # de Postgres local sin password (dev en loopback), solo al caso "host remoto/no-
+        # default + password vacío".
+        if self.db_host not in ("127.0.0.1", "localhost") and not self.db_password:
+            raise RuntimeError(
+                "CRITICAL SEC-03: DB_HOST apunta a un host no-local pero DB_PASSWORD "
+                "está vacío o no seteado. Configurá DB_PASSWORD explícitamente."
+            )
+
         self.sqlite_path = "hermes_fallback.db"
-        self.is_mysql = False
+        self.is_postgres = False
         self._init_db()
 
     def _init_db(self):
         try:
-            # Intentar conectar a MySQL
-            conn = pymysql.connect(
+            # A diferencia de MySQL, Postgres no soporta "CREATE DATABASE IF NOT EXISTS"
+            # (ni permite CREATE DATABASE dentro de la misma conexión/transacción que ya
+            # apunta a otra base) -- conectamos directo a self.db_name, que en Render (o
+            # cualquier Postgres gestionado) ya viene provisionado de antemano. Para
+            # Postgres local en dev, hay que crear la base una vez a mano (`createdb
+            # hermeschat` o equivalente) antes de levantar el backend por primera vez.
+            conn = psycopg.connect(
                 host=self.db_host,
                 user=self.db_user,
                 password=self.db_password,
-                port=self.db_port
+                port=self.db_port,
+                dbname=self.db_name,
             )
             cursor = conn.cursor()
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.db_name}")
-            cursor.execute(f"USE {self.db_name}")
-            
+
             # Tabla de usuarios
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
@@ -65,48 +82,52 @@ class DatabaseConnection:
                     created_at INTEGER NOT NULL,
                     last_relay_at INTEGER NOT NULL,
                     is_active BOOLEAN DEFAULT TRUE,
-                    recovery_proof_hex VARCHAR(64) NULL
-                ) ENGINE=InnoDB
+                    recovery_proof_hex VARCHAR(64)
+                )
             """)
 
             # Tabla de backups cifrados en la nube (save_cloud_backup/get_cloud_backups).
             # Faltaba — /api/backup fallaba con 500 en cualquier entorno recién provisionado.
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS cloud_backups (
-                    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                    id SERIAL PRIMARY KEY,
                     user_hash VARCHAR(64) NOT NULL,
                     backup_id VARCHAR(128) NOT NULL,
-                    encrypted_data LONGTEXT NOT NULL,
+                    encrypted_data TEXT NOT NULL,
                     backup_type VARCHAR(32) NOT NULL,
-                    parent_id VARCHAR(128) NULL,
-                    timestamp INTEGER NOT NULL,
-                    INDEX idx_cloud_backups_user_hash (user_hash)
-                ) ENGINE=InnoDB
+                    parent_id VARCHAR(128),
+                    timestamp INTEGER NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cloud_backups_user_hash ON cloud_backups (user_hash)
             """)
 
             # Relaciones opacas para reconciliación (ver docstring de la clase y BACKLOG.md #1).
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS user_relationships (
-                    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+                    id SERIAL PRIMARY KEY,
                     user_hash VARCHAR(64) NOT NULL,
                     relationship_type VARCHAR(16) NOT NULL,
                     target_id VARCHAR(128) NOT NULL,
                     created_at INTEGER NOT NULL,
-                    UNIQUE KEY uniq_relationship (user_hash, relationship_type, target_id),
-                    INDEX idx_user_relationships_user_hash (user_hash)
-                ) ENGINE=InnoDB
+                    CONSTRAINT uniq_relationship UNIQUE (user_hash, relationship_type, target_id)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_relationships_user_hash ON user_relationships (user_hash)
             """)
 
             conn.commit()
             cursor.close()
             conn.close()
 
-            self.is_mysql = True
-            logger.info("Successfully connected to MySQL database.")
-            print("  -> MySQL database connection established.")
+            self.is_postgres = True
+            logger.info("Successfully connected to PostgreSQL database.")
+            print("  -> PostgreSQL database connection established.")
         except Exception as e:
-            logger.warning(f"MySQL connection failed: {e}. Falling back to SQLite.")
-            print(f"  -> MySQL offline ({e}). Falling back to local SQLite.")
+            logger.warning(f"PostgreSQL connection failed: {e}. Falling back to SQLite.")
+            print(f"  -> PostgreSQL offline ({e}). Falling back to local SQLite.")
             self._init_sqlite()
 
     def _init_sqlite(self):
@@ -165,12 +186,12 @@ class DatabaseConnection:
 
     def _get_connection(self):
         try:
-            if self.is_mysql:
-                return pymysql.connect(
+            if self.is_postgres:
+                return psycopg.connect(
                     host=self.db_host,
                     user=self.db_user,
                     password=self.db_password,
-                    database=self.db_name,
+                    dbname=self.db_name,
                     port=self.db_port
                 )
             else:
@@ -206,7 +227,7 @@ class DatabaseConnection:
             # Redondear marca de tiempo a 5 minutos (300 segundos) para anonimato
             rounded_time = (now // 300) * 300
 
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("""
                     INSERT INTO users (id_hash, public_key_mlkem, public_key_sphincs, created_at, last_relay_at, is_active)
                     VALUES (%s, %s, %s, %s, %s, %s)
@@ -221,7 +242,7 @@ class DatabaseConnection:
             cursor.close()
         except DatabaseError:
             raise
-        except (pymysql.err.IntegrityError, sqlite3.IntegrityError):
+        except (psycopg.errors.UniqueViolation, sqlite3.IntegrityError):
             # Carrera: dos registros concurrentes del mismo id_hash nuevo pasaron ambos
             # el chequeo `existing` de arriba antes de que cualquiera insertara; la PK
             # rechaza al segundo. Mismo resultado (409), no un 503 de error de DB real.
@@ -236,7 +257,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("SELECT id_hash, public_key_mlkem, public_key_sphincs, is_active FROM users WHERE id_hash = %s", (id_hash,))
             else:
                 cursor.execute("SELECT id_hash, public_key_mlkem, public_key_sphincs, is_active FROM users WHERE id_hash = ?", (id_hash,))
@@ -268,7 +289,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("UPDATE users SET recovery_proof_hex = %s WHERE id_hash = %s", (proof_hex, id_hash))
             else:
                 cursor.execute("UPDATE users SET recovery_proof_hex = ? WHERE id_hash = ?", (proof_hex, id_hash))
@@ -286,7 +307,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("SELECT recovery_proof_hex FROM users WHERE id_hash = %s", (id_hash,))
             else:
                 cursor.execute("SELECT recovery_proof_hex FROM users WHERE id_hash = ?", (id_hash,))
@@ -323,7 +344,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("SELECT COUNT(*) FROM replay_claims WHERE state = 'consumed'")
                 count = cursor.fetchone()[0]
                 cursor.close()
@@ -341,15 +362,15 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("SELECT COUNT(*) FROM users")
                 u = cursor.fetchone()[0]
                 # replay_claims solo existe si se aplicó el schema de hermes_replay_sql
                 # (Rust/hermes_ffi). En un entorno donde ese pipeline nunca se conectó
                 # (p.ej. desarrollo sin hermes_ffi compilado) la tabla no existe todavía —
                 # eso no es un error, no hay nada que purgar ahí.
-                cursor.execute("SHOW TABLES LIKE 'replay_claims'")
-                if cursor.fetchone():
+                cursor.execute("SELECT to_regclass('replay_claims')")
+                if cursor.fetchone()[0]:
                     cursor.execute("SELECT COUNT(*) FROM replay_claims")
                     k = cursor.fetchone()[0]
                     cursor.execute("TRUNCATE TABLE replay_claims")
@@ -375,7 +396,7 @@ class DatabaseConnection:
         try:
             cursor = conn.cursor()
             ts = int(time.time())
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("""
                     INSERT INTO cloud_backups (user_hash, backup_id, encrypted_data, backup_type, parent_id, timestamp)
                     VALUES (%s, %s, %s, %s, %s, %s)
@@ -398,7 +419,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("""
                     SELECT backup_id, encrypted_data, backup_type, parent_id, timestamp 
                     FROM cloud_backups 
@@ -441,11 +462,11 @@ class DatabaseConnection:
         try:
             cursor = conn.cursor()
             now = int(time.time())
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("""
                     INSERT INTO user_relationships (user_hash, relationship_type, target_id, created_at)
                     VALUES (%s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE created_at = created_at
+                    ON CONFLICT ON CONSTRAINT uniq_relationship DO NOTHING
                 """, (user_hash, relationship_type, target_id, now))
             else:
                 cursor.execute("""
@@ -465,7 +486,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("""
                     DELETE FROM user_relationships
                     WHERE user_hash = %s AND relationship_type = %s AND target_id = %s
@@ -489,7 +510,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("""
                     SELECT relationship_type, target_id FROM user_relationships WHERE user_hash = %s
                 """, (user_hash,))
@@ -516,7 +537,7 @@ class DatabaseConnection:
         conn = self._get_connection()
         try:
             cursor = conn.cursor()
-            if self.is_mysql:
+            if self.is_postgres:
                 cursor.execute("SELECT COUNT(*) FROM user_relationships WHERE user_hash = %s", (user_hash,))
                 count = cursor.fetchone()[0]
                 cursor.execute("DELETE FROM user_relationships WHERE user_hash = %s", (user_hash,))

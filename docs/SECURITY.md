@@ -23,7 +23,7 @@ Este documento describe el estado de seguridad vigente para el backend HermesCha
 
 ### 2.2 Protección de origen y cabeceras HTTP
 * `ALLOWED_ORIGINS` configurado y validado; `*` está prohibido.
-* `SecurityHeadersMiddleware` agrega `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy`, `Permissions-Policy` y `Strict-Transport-Security` en producción.
+* `add_security_headers` agrega `X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy`, `Permissions-Policy` y `Strict-Transport-Security` en producción.
 * CORS activo solo sobre orígenes permitidos; métodos restringidos y headers declarados.
 
 ### 2.3 Anti-replay y validación de firma

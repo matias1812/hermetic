@@ -41,7 +41,8 @@ COPY --from=ip_middleware_builder \
 # Sin HERMES_ENV=production: no hay header HSTS, y el registro anti-replay
 # (otp_registry.py) cae a memoria de proceso en vez del backend SQL compartido.
 # Aceptable para una sola instancia de bajo tráfico; para producción real hay que
-# compilar hermes_ffi + Postgres/MySQL y setear HERMES_ENV=production explícitamente.
+# compilar hermes_ffi + Postgres y setear HERMES_ENV=production explícitamente (ver
+# Dockerfile.backend.production, que ya hace esto).
 #
 # Variables requeridas en runtime (las inyecta la plataforma de hosting, NO van acá):
 #   SESSION_SECRET     — HMAC de sesión, mínimo 32 caracteres
@@ -49,7 +50,7 @@ COPY --from=ip_middleware_builder \
 #                         frontend se empaqueta como APK Android (WebView), agregar
 #                         "null,file://" acá — el WebView manda Origin: file://, y sin
 #                         esto el login/relay/backup quedan bloqueados por CORS.
-#   DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/DB_PORT (opcionales) — si no hay MySQL
+#   DB_HOST/DB_USER/DB_PASSWORD/DB_NAME/DB_PORT (opcionales) — Postgres; si no hay
 #                         alcanzable, db_connection.py cae solo a SQLite local.
 
 EXPOSE 8000

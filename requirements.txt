@@ -20,8 +20,10 @@ websockets>=12.0
 # HTTP multipart support (FastAPI file uploads)
 python-multipart>=0.0.6
 
-# Database
-pymysql>=1.1.0
+# Database — Postgres (Render tiene Postgres gestionado, no MySQL). psycopg3 usa
+# placeholders %s igual que pymysql/MySQLdb, así que el dialecto de las queries en
+# db_connection.py no cambió, solo el driver y algo de sintaxis DDL específica de Postgres.
+psycopg[binary]>=3.1.0
 
 # Steganography engine (experimental layer — not a security primitive)
 numpy>=1.26.0

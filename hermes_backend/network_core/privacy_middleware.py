@@ -46,6 +46,16 @@ class TotalPrivacyMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
         if os.getenv("TESTING_MODE") == "1":
+            # SEC: TESTING_MODE deja que un cliente controle su propia IP "anonimizada"
+            # via header X-Test-IP -- un backdoor de spoofing de IP necesario para tests
+            # locales, pero que nunca debería poder activarse en un despliegue real. No
+            # tenía ningún chequeo cruzado con HERMES_ENV hasta ahora.
+            env = os.getenv("HERMES_ENV", "development")
+            if env == "production":
+                raise RuntimeError(
+                    "CRITICAL SEC-05: TESTING_MODE=1 no puede estar activo con "
+                    "HERMES_ENV=production (permite spoofear la IP vía X-Test-IP)."
+                )
             logger.warning("==================================================")
             logger.warning("WARNING: TESTING_MODE IS ACTIVE. X-Test-IP ENABLED")
             logger.warning("==================================================")

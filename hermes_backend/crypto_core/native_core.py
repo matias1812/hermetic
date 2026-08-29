@@ -450,7 +450,13 @@ class HermesNativeCore:
             try:
                 # 5. Criptografía: Descifrado
                 if not ciphertext_kem_hex:
-                    aes_key = bytearray(KyberManager.derive_aes_key(bytes(session_key)))
+                    # SEC: pasar bytearray, no bytes -- derive_aes_key() intenta zeroizar su
+                    # parámetro (kyber_manager.py::safe_zeroize), pero bytes es inmutable y
+                    # eso lo hacía un no-op silencioso (session_key en texto plano quedaba
+                    # vivo en ese bytes hasta que el GC lo recolectara). El session_key
+                    # bytearray original ya se zeroiza aparte más abajo -- esto zeroiza
+                    # también la copia intermedia.
+                    aes_key = bytearray(KyberManager.derive_aes_key(bytearray(session_key)))
                     try:
                         plaintext = AEADCipher.decrypt(encrypted_message, bytes(aes_key), aes_nonce_bytes, aad)
                     except Exception as e:

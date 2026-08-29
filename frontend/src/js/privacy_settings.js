@@ -21,7 +21,9 @@ export class PrivacySettings {
             backupEnabled: false,
             backupFrequency: 86400, // 24 horas por defecto si se activan
             backupType: 'incremental', // 'incremental', 'full'
-            backupDestination: 'local' // 'local', 'cloud', 'custom'
+            // SEC: sin 'cloud' -- el auto-backup es 100% local (ver BACKLOG.md, el fallback
+            // de clave para 'cloud' era derivable de info pública, rompía zero-knowledge).
+            backupDestination: 'local' // 'local', 'custom'
         };
         this.loadSettings();
     }
@@ -167,7 +169,6 @@ export class PrivacySettings {
                                 <span class="text-gray-300 font-bold block mb-1">Destino:</span>
                                 <div class="flex flex-col gap-1 text-gray-400 text-[10px]">
                                     <label class="text-terminalGreen font-bold"><input type="radio" name="bkpDest" ${isDest('local')} onchange="window.privacySettings.set('backupDestination', 'local')"> Solo dispositivo</label>
-                                    <label><input type="radio" name="bkpDest" ${isDest('cloud')} onchange="window.privacySettings.set('backupDestination', 'cloud')"> Nube cifrada</label>
                                     <label><input type="radio" name="bkpDest" ${isDest('custom')} onchange="window.privacySettings.set('backupDestination', 'custom')"> Carpeta personalizada</label>
                                 </div>
                             </div>

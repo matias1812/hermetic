@@ -43,6 +43,10 @@ logs/
 *.log
 scratch/
 
+# Build output (Vercel lo genera desde cero en cada deploy vía vercel.json;
+# commitear esto solo genera diffs de hashes de archivo en cada build local)
+dist/
+
 # IDEs & OS files
 .idea/
 .vscode/
